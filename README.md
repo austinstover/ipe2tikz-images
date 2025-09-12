@@ -1,12 +1,18 @@
-ipe2tikz
+ipe2tikz-images
 ========
-
-*Update:* This repository is not maintained.  The software is licensed under
-the GPL; anyone is welcome to fork it.
-
 This is a TikZ exporter ipelet: a plugin for [Ipe](http://ipe.otfried.org/) that
 exports **readable** [TikZ](https://sourceforge.net/projects/pgf/) pictures for
 use in LaTeX documents.
+
+It was forked from [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz),
+and tweaked to export images embedded as bitmaps in the ipe document into the TikZ picture.
+
+You should move the pdfs this ipelet produces along with the tex output into your latex document folder so that they
+can be references and displayed from the TikZ picture.
+
+Note that exporting these embedded images is still an experimental feature.
+
+
 
 ![ipe window](example.png)
 
@@ -35,7 +41,7 @@ to specify most drawing parameters.
 
 1. Copy `tikz.isy` into `~/.ipe/styles` on Linux and Macs.  On Windows, I
    believe you have to use the directory containing the built-in stylesheets.
-2. Copy `tikz.lua` into `~/.ipe/ipelets` on Linux and Macs, and into
+2. Copy `tikz-images.lua` into `~/.ipe/ipelets` on Linux and Macs, and into
    `$USERPROFILE\Ipelets` on Windows.
 3. Copy `tikzlibraryipe.code.tex` somewhere LaTeX can find it, e.g. the same
    directory as the LaTeX file you're trying to compile.  Or you can follow
@@ -97,7 +103,7 @@ others: see [limitations](#limitations) below.
 
 In this mode, the ipelet creates a file with the TikZ code necessary to
 reproduce the current view on the current page.  This is suitable for
-`\input`ting or copying into a LaTeX document.  
+`\input`ting or copying into a LaTeX document.
 
 Select *Export to File* from the *TikZ Export* submenu in the ipelets menu, or
 use the shortcut `Alt+T`.  A dialog appears, with the following options:
@@ -177,6 +183,7 @@ you want to dig for details.  In summary:
 + Group objects are exported to TikZ scopes.  The clipping path, if it exists,
   becomes a `\clip` path in the scope.
 + Reference objects (marks) are exported to TikZ `\pic` commands.
++ **NEW** Image objects are exported to TikZ `\includegraphics` commands.
 + If configured to do so, the stylesheet cascade is exported to a TikZ style
   called `ipe stylesheet`.
 
@@ -250,10 +257,10 @@ consists of the `ipe import` style, which contains (among other things):
 + Exporting gradients and effects is not supported.  Gradients could in theory
   be exported as shades, if someone wanted to code it.  Effects probably cannot
   be implemented within PGF/TikZ.
-+ Exporting bitmapped images is not supported.  You can use `\includegraphics`
-  within a text object in Ipe, after putting `\usepackage{graphicx}` in the
-  preamble.  The image will display in Ipe (if you have a recent enough version), 
-  and it should appear after compiling the exported code.
++ **NEW** Exporting bitmapped images is now supported.  Bitmapped images are 
+  produced as output pdfs. Place these next to the `.tex` output file in your 
+  latex folder and use `\usepackage{graphicx}` in the preamble.  The image 
+  should appear after compiling the exported code.
 + Only the current page, and the current view on that page, are exported.
 + The ipelet won't export symbols (marks and arrows) from stylesheets; these
   have to be defined by hand in a TikZ style.  Note however that Ipe's standard
