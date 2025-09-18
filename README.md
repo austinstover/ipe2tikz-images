@@ -2,17 +2,14 @@ ipe2tikz-images
 ========
 This is a TikZ exporter ipelet: a plugin for [Ipe](http://ipe.otfried.org/) that
 exports **readable** [TikZ](https://sourceforge.net/projects/pgf/) pictures for
-use in LaTeX documents.
+use in LaTeX documents, including embedded bitmaps (i.e. imported images).
 
 It was forked from [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz),
 and tweaked to export images embedded as bitmaps in the ipe document into the TikZ picture.
 
-You should move the pdfs this ipelet produces along with the tex output into your latex document folder so that they
-can be referenced and displayed from the TikZ picture.
-
-Note that exporting these embedded images is still an experimental feature.
-
-
+If you choose "Export to file", then you should place the tex output and images this ipelet produces into your latex document directory so that they
+can be referenced and displayed from the TikZ picture. Use `\usepackage{graphicx}` in your latex preamble. If you choose "Export to text object", then you will be given the option to choose the root
+file name of any selected images; they will automatically be placed in the same directory as the ipe document.
 
 ![ipe window](example.png)
 
@@ -141,7 +138,7 @@ useful for the following kind of workflow:
 2. Convert it in-place to TikZ.
 3. Edit the TikZ code in the Ipe textbox, and use the Apply button to
    immediately see your changes while editing.
-4. Copy-paste the resulting TikZ picture to a LaTeX document.
+4. Copy-paste the resulting TikZ picture to a LaTeX document. If you use any embedded images in this picture, then you'll need to find those in the same directory as your ipe document and move these to your LaTeX document directory.
 
 For this to work, you must have Ipe 7.2.6+ installed, and you need to put
 `tikzlibraryipe.code.tex` either in `~/.ipe/latexrun`, or somewhere in your
@@ -258,9 +255,7 @@ consists of the `ipe import` style, which contains (among other things):
   be exported as shades, if someone wanted to code it.  Effects probably cannot
   be implemented within PGF/TikZ.
 + **NEW** Exporting bitmapped images is now supported.  Bitmapped images are 
-  produced as output pdfs. Place these next to the `.tex` output file in your 
-  latex folder and use `\usepackage{graphicx}` in the preamble.  The image 
-  should appear after compiling the exported code.
+  produced as output pdfs.
 + Only the current page, and the current view on that page, are exported.
 + The ipelet won't export symbols (marks and arrows) from stylesheets; these
   have to be defined by hand in a TikZ style.  Note however that Ipe's standard
