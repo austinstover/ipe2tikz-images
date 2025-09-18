@@ -1,4 +1,4 @@
-ipe2tikz
+ipe2tikz-images
 ========
 
 The main repository is not maintained.  The software is licensed under
