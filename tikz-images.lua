@@ -38,9 +38,9 @@ shortcuts.ipelet_1_tikz = "Alt+T"
 shortcuts.ipelet_2_tikz = "Ctrl+Shift+T"
 
 -- Globals
-write = _G.io.write
-indent_amt = "  "
-indent = ""
+local write = _G.io.write
+local indent_amt = "  "
+local indent = ""
 
 -- paths used for placing images during "Export to File"
 local _outdir = nil  -- set in run()
@@ -55,6 +55,25 @@ end
 --------------------------------------------------------------------------------
 -- Utility
 --------------------------------------------------------------------------------
+
+-- For debugging
+function print_message(s, details)
+  -- Print a string with a dialog box; s = String to Print, details = variable
+  --   to print
+  ipeui.messageBox(nil, "information", s, details, "ok")
+end
+
+function get(model, obj, prop)
+	-- For symbols, replace stroke and fill of inner elements with that of symbol
+	--   Since we don't know a priori which elements are members of a symbol, we
+	--   need to wrap all obj:get("stroke") and obj:get("fill") calls in this
+	--   function, which returns the higher level stroke and fill, saved when
+	--	 the symbol is found in the element tree in model.params.
+	got = obj:get(prop)
+	if prop == "stroke" and got == "sym-stroke" then return model.params.sym_stroke or "" end
+    if prop == "fill"   and got == "sym-fill"   then return model.params.sym_fill or ""   end
+	return got
+end
 
 function concat_pairs(t, sep, order)
    local ret = ""
@@ -556,12 +575,12 @@ function export_mark(model, obj, matrix)
 
    -- draw and fill
    if drawing then
-      if obj:get("stroke") ~= "black" then
-         color_option(obj:get("stroke"), "draw", options, nil, not filling)
+      if get(model, obj, "stroke") ~= "black" then
+         color_option(get(model, obj, "stroke"), "draw", options, nil, not filling)
       end
    end
    if filling then
-      color_option(obj:get("fill"), "fill", options, nil, not drawing)
+      color_option(get(model, obj, "fill"), "fill", options, nil, not drawing)
    end
 
    write(indent .. "\\pic")
@@ -606,7 +625,7 @@ function export_group(model, obj, matrix)
 
    local clip = obj:clip()
    if clip then
-      export_path(clip, "clip", ipe.Matrix())
+      export_path(model, clip, "clip", ipe.Matrix())
    end
 
    for i,element in ipairs(obj:elements()) do
@@ -628,6 +647,11 @@ end
 -- function. However, in addition to the matrix, a reference might also have a
 -- position paramter. This additional translation needs to be taken into account
 -- during export.
+-- When a symbol uses stroke="sym-stroke" or fill="sym-fill", it really means we 
+-- need to use the toplevel stroke or fill. So we replace the "sym-stroke" or 
+-- "sym-fill" attributes of child objects with their parent symbol attributes
+-- by setting the model params and calling the get(model, obj, prop) wrapper
+-- instead of obj:get(prop) for prop == "stroke" or "fill".
 function export_reference(model, obj, matrix)
    -- First we need to find the name of the symbol
    -- This is done using basic string processing
@@ -642,9 +666,22 @@ function export_reference(model, obj, matrix)
    -- Now we can look for the symbol in all our stylesheets
    -- We assume that the symbol consists of a group
    local group = model.doc:sheets():find("symbol", sym_name)
+   
+   -- Set stroke and fill attributes to replace stroke="sym-stroke" or fill="sym-fill"
+   model.params.sym_stroke = obj:get("stroke")
+   model.params.sym_fill   = obj:get("fill")
+   
    -- Both reference and group have a matrix, furthermore the reference might have
    -- a position as well. The order of matrices matters of course
-   export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()))
+   local ok, err = pcall(function()
+     export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()))
+   end)
+   
+   -- Reset stroke and fill now
+   model.params.sym_stroke = nil
+   model.params.sym_fill   = nil
+   
+   if not ok then error(err) end
 end
 
 --------------------------------------------------------------------------------
@@ -667,23 +704,23 @@ function export_text(model, obj, matrix)
    local anchor
    local ha = obj:get("horizontalalignment")
    local va = obj:get("verticalalignment")
-   -- if minipage then ha = "left" end
+   if minipage then ha = "left" end
    if ha == "left" then
       if va == "bottom" then
          anchor = "south west"
       elseif va == "baseline" then
          anchor = "base west"
-      elseif va == "vcenter" or va == "center" then
+      elseif va == "vcenter" then
          anchor = "west"
       elseif va == "top" then
          anchor = "north west"
       end
-   elseif ha == "hcenter" or ha == "center" then
+   elseif ha == "hcenter" then
       if va == "bottom" then
          anchor = "south"
       elseif va == "baseline" then
          anchor = "base"
-      elseif va == "vcenter" or va == "center" then
+      elseif va == "vcenter" then
          anchor = "center"
       elseif va == "top" then
          anchor = "north"
@@ -693,7 +730,7 @@ function export_text(model, obj, matrix)
          anchor = "south east"
       elseif va == "baseline" then
          anchor = "base east"
-      elseif va == "vcenter" or va == "center" then
+      elseif va == "vcenter" then
          anchor = "east"
       elseif va == "top" then
          anchor = "north east"
@@ -801,17 +838,17 @@ function export_text(model, obj, matrix)
    end
 
    -- color
-   if obj:get("stroke") ~= "black" then
-      color_option(obj:get("stroke"), "text", options)
+   if get(model, obj, "stroke") ~= "black" then
+      color_option(get(model, obj, "stroke"), "text", options)
    end
 
    -- opacity is always a symbolic name in ipe
    local opacity = obj:get("opacity")
    local prepend = nil
    if params.stylesheets then prepend = "ipe opacity " end
+   opacity = string.gsub(opacity, "%%", "") -- strip %
    if opacity ~= "opaque" then
-      opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100)
-      string_option(opacity, "opacity", options, prepend)
+      string_option(opacity, nil, options, prepend)
    end
 
    write(indent .. "\\node")
@@ -909,7 +946,7 @@ function export_image(model, obj, matrix)
 	-- ---- Write to tex file --------------------------------------------------
 		
 	local options = { "x=1bp", "y=1bp" }
-	if round(t.x) ~= 0 or round(t.y) ~= 0 then
+	if round(img_ll_new.x) ~= 0 or round(img_ll_new.y) ~= 0 then
 		table.insert(options, "shift={" .. svec(img_ll_new) .. "}")
 	end	
 	matrix_to_options(matrix, options)
@@ -1177,7 +1214,7 @@ end
 --   transformations pathmode
 -- Not implemented: gradient
 
-function export_path(shape, mode, matrix, obj)
+function export_path(model, shape, mode, matrix, obj)
    local orig_matrix = matrix
    local options = {}
 
@@ -1246,8 +1283,8 @@ function export_path(shape, mode, matrix, obj)
       local color_done = nil
       -- Special case: \filldraw with same draw and fill colors
       if drawing and filling and obj:get("tiling") == "normal" then
-         if obj:get("stroke") == obj:get("fill") then
-            color_option(obj:get("stroke"), "color", options, nil, true)
+         if get(model, obj, "stroke") == get(model, obj, "fill") then
+            color_option(get(model, obj, "stroke"), "color", options, nil, true)
             color_done = true
          end
       end
@@ -1256,8 +1293,8 @@ function export_path(shape, mode, matrix, obj)
          -- stroke color
          -- "default" stroke is black
          -- need draw= if filling
-         if obj:get("stroke") ~= "black" and not color_done then
-            color_option(obj:get("stroke"), "draw", options, nil, not filling)
+         if get(model, obj, "stroke") ~= "black" and not color_done then
+            color_option(get(model, obj, "stroke"), "draw", options, nil, not filling)
          end
 
          -- pen / line width
@@ -1293,7 +1330,7 @@ function export_path(shape, mode, matrix, obj)
          if obj:get("rarrow") then
             rarrow = arrow_spec(
                obj:get("rarrowshape"), obj:get("rarrowsize"), nil)
-         end
+         end		 
          if farrow or rarrow then
             table.insert(options, (rarrow or "") .. "-" .. (farrow or ""))
          end
@@ -1303,10 +1340,10 @@ function export_path(shape, mode, matrix, obj)
          if obj:get("tiling") ~= "normal" then
             -- tiling patterns: symbolic only
             string_option(obj:get("tiling"), "pattern", options)
-            color_option(obj:get("fill"), "pattern color", options)
+            color_option(get(model, obj, "fill"), "pattern color", options)
          else
             if not color_done then
-               color_option(obj:get("fill"), "fill", options, nil, not drawing)
+               color_option(get(model, obj, "fill"), "fill", options, nil, not drawing)
             end
          end
 
@@ -1320,9 +1357,9 @@ function export_path(shape, mode, matrix, obj)
       local opacity = obj:get("opacity")
       local prepend = nil
       if params.stylesheets then prepend = "ipe opacity " end
+      opacity = string.gsub(opacity, "%%", "") -- strip %
       if opacity ~= "opaque" then
-         opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100)
-         string_option(opacity, "opacity", options, prepend)
+         string_option(opacity, nil, options, prepend)
       end
    end
 
@@ -1475,7 +1512,7 @@ function export_object(model, obj, origin)
    matrix = ipe.Translation(-origin) * matrix
 
    if obj:type() == "path" then
-      export_path(obj:shape(), obj:get("pathmode"), matrix, obj)
+      export_path(model, obj:shape(), obj:get("pathmode"), matrix, obj)
    elseif obj:type() == "text" then
       export_text(model, obj, matrix)
    elseif obj:type() == "group" then
@@ -1485,6 +1522,7 @@ function export_object(model, obj, origin)
          export_mark(model, obj, matrix)
       else -- reference to a general symbol
          export_reference(model, obj, matrix)
+	  end
    elseif obj:type() == "image" then      -- <-- ADDED FOR IMAGES
       if(model.params.do_text == true and _img_serial == 0) then
         run_text_image_dialog(model) -- For first image, run text image dialog
@@ -1693,7 +1731,7 @@ function run_file_dialog(model)
    d:addButton("cancel", "&Cancel", "reject")
 
    -- Workaround: sometimes these updates need to happen in the gui event loop.
-   t = ipeui.Timer(
+   local t = ipeui.Timer(
       {setEnabled=function()
           d:setEnabled("filename", false)
           d:setEnabled("scope", not params.fulldoc)
@@ -1880,7 +1918,6 @@ function run(model, num)
    -- TikZ environment
    local envname = "tikzpicture"
    if params.scopeonly then envname = "scope" end
-   write("\\resizebox{\\ipefigwidth}{!}{\n")
    write("\\begin{" .. envname .. "}")
    local options = {}
    if params.stylesheets then
@@ -1937,7 +1974,6 @@ function run(model, num)
       end
    end
    write("\\end{" .. envname .. "}\n")
-   write("}\n")
 
    if params.fulldoc then
       write("\\end{document}\n")
