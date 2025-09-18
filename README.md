@@ -8,7 +8,7 @@ It was forked from [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2
 and tweaked to export images embedded as bitmaps in the ipe document into the TikZ picture.
 
 You should move the pdfs this ipelet produces along with the tex output into your latex document folder so that they
-can be references and displayed from the TikZ picture.
+can be referenced and displayed from the TikZ picture.
 
 Note that exporting these embedded images is still an experimental feature.
 
@@ -126,7 +126,7 @@ use the shortcut `Alt+T`.  A dialog appears, with the following options:
   document* is checked.
 + *Export grid:* if desired, you can export Ipe's grid as well.  This is useful
   for debugging the placement of objects.
-+ *Output file:* this is where the TikZ code goes.
++ *Output file:* this is where the TikZ code goes (as well as any embedded images, as pdfs).
 
 If *Export complete document* is unchecked and a coordinate system is defined,
 the origin of the coordinate system becomes TikZ's origin.

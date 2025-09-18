@@ -1,6 +1,6 @@
 ----------------------------------------------------------------------
 -- ipelet: tikz-images.lua
--- Author: Austin Stover with AI assistance
+-- Author: Austin Stover
 ----------------------------------------------------------------------
 --[[
 	Copyright (C) 2025 Austin Stover
@@ -68,7 +68,6 @@ indent = ""
 
 -- paths used for asset emission during "Export to File"
 local _outdir = nil  -- set in run()
-local _tmpdir = nil  -- set in run()
 
 -- serial for naming exported images
 local _img_serial = 0
@@ -81,48 +80,14 @@ end
 -- Utility
 --------------------------------------------------------------------------------
 
--- Print a string with a dialog box
--- s = String to Print
--- details = variable to print
+--NEW utility for debugging
 local function print_message(s, details)
+  -- Print a string with a dialog box; s = String to Print, details = variable
+  --   to print
   ipeui.messageBox(nil, "information", s, details, "ok")
 end
 
--- --- helpers for image -> one-object PDF (no external tools)
-
--- Safe bbox for objects that may not implement :bbox() (e.g., image)
-local function safe_bbox(obj)
-  local ok, r = _G.pcall(function() return obj:bbox() end)
-  if ok and r then return r end
-  ok, r = _G.pcall(function() return obj:rect() end)
-  if ok and r then return r end
-  return ipe.Rect(0,0,0,0)
-end
-
-local function _write_one_object_pdf(obj, out_pdf)
-  local doc  = ipe.Document()
-  local page = ipe.Page()
-
-  local clone = obj:clone()
-  if clone:type() ~= "text" then clone:set("transformations","affine") end
-  page:insert(1, clone, 0, "alpha")
-
-  -- ensure single-page output
-  _G.pcall(function() doc:remove(1) end)
-  doc:insert(1, page)
-  doc:save(out_pdf)
-end
-
---NEW Utilities for image Export
-
--- join paths in a platform-agnostic way
-local function _join(a,b)
-  if not a or a == "" then return b end
-  local sep = (a:sub(-1) == "/" or a:sub(-1) == "\\") and "" or "/"
-  return a .. sep .. b
-end
-
---OLD Utilities for image Export
+--OLD Utilities
 
 function concat_pairs(t, sep, order)
    local ret = ""
@@ -894,163 +859,79 @@ end
 --------------------------------------------------------------------------------
 
 function export_image(model, obj, matrix)
-  -- local helpers kept inside to avoid touching globals -----------------------
-  local function parse_rect_all(o)
-    local xml = o:xml() or ""
-    local raw = xml:match('rect%s*=%s*"(.-)"') or xml:match("rect%s*=%s*'(.-)'")
-    if not raw then return nil end
-    local n = {}
-    for tok in raw:gmatch("%S+") do
-      local v = tonumber(tok); if not v then return nil end
-      n[#n+1] = v; if #n == 4 then break end
-    end
-    if #n < 4 then return nil end
-    local x1,y1,x2,y2 = n[1],n[2],n[3],n[4]
-    local llx = math.min(x1,x2)
-    local lly = math.min(y1,y2)
-    local urx = math.max(x1,x2)
-    local ury = math.max(y1,y2)
-    return llx, lly, urx, ury
-  end
-
-  local function is_axis_aligned(m)
-    local a,c,b,d = table.unpack(m:coeff())
-    return (round(b) == 0 and round(c) == 0)
-  end
-
-  local function linear_part(m)
-    local tr = m:translation()
-    return ipe.Translation(ipe.Vector(-tr.x, -tr.y)) * m
-  end
-  -- -------------------------------------------------------------------------
-
-  -- ---- Text-object mode: placeholder (unchanged) --------------------------
-  if params and params.filename == nil then
-    local options = { "x=1bp", "y=1bp" }
-    local v = matrix:translation()
-    if round(v.x) ~= 0 or round(v.y) ~= 0 then
-      table.insert(options, "shift={" .. svec(v) .. "}")
-    end
-    matrix_to_options(matrix, options)
-    local bbox = safe_bbox(obj)
-    write(indent .. "\\begin{scope}")
-    if #options > 0 then write("[" .. table.concat(options, ", ") .. "]") end
-    write("\n")
-    write(indent .. indent_amt .. "%% Image placeholder (text-object export)\n")
-    write(indent .. indent_amt ..
-          string.format("%% Expected size: %sbp x %sbp\n",
-                        sround(bbox:width()), sround(bbox:height())))
-    write(indent .. "\\end{scope}\n")
-    return
-  end
-
-  -- ---- File-export: one-object PDF (unchanged) ----------------------------
-  local outdir  = _outdir or "."
-  local fname   = model.params.name .. string.format("_img_%03d.pdf", _next_image_serial())
-  local out_pdf = (_join and _join(outdir, fname)) or (outdir .. "/" .. fname)
-
-  local okpdf, errpdf = _G.pcall(function()
-    _write_one_object_pdf(obj, out_pdf)
-  end)
-
-  -- ---- Build placement ----------------------------------------------------
-  local llx, lly, urx, ury = parse_rect_all(obj)
-  local options = { "x=1bp", "y=1bp" }
-
-  if llx then
-    if is_axis_aligned(matrix) then
-      -- Readable branch: shift + (x/yscale), node at (llx,lly)
-      local vtr = matrix:translation()
-      if round(vtr.x) ~= 0 or round(vtr.y) ~= 0 then
-        table.insert(options, "shift={" .. svec(vtr) .. "}")
-      end
-      matrix_to_options(matrix, options)
-
-      write(indent .. "\\begin{scope}")
-      if #options > 0 then write("[" .. table.concat(options, ", ") .. "]") end
-      write("\n")
-      if okpdf then
-        write(indent .. indent_amt ..
-          string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (%s,%s){\\includegraphics{%s}};\n",
-                        sround(llx), sround(lly), fname))
-      else
-        local bbox = safe_bbox(obj)
-        write(indent .. indent_amt .. "%% image export failed (one-object PDF)\n")
-        write(indent .. indent_amt .. "%% error: " .. tostring(errpdf) .. "\n")
-        write(indent .. indent_amt ..
-          string.format("%% Expected size: %sbp x %sbp\n",
-                        sround(bbox:width()), sround(bbox:height())))
-      end
-      write(indent .. "\\end{scope}\n")
-
-    else
-      -- General affine: robust a,b,c,d from columns; E,F = min of 4 corners
-      local Mlin = linear_part(matrix)
-      local ex = Mlin * ipe.Vector(1,0)    -- (a, b)
-      local ey = Mlin * ipe.Vector(0,1)    -- (c, d)
-      local a, b, c, d = ex.x, ex.y, ey.x, ey.y
-      local t = matrix:translation()
-
-      -- Transform the four rect corners (using full affine)
-      local x0 = a*llx + c*lly + t.x
-      local y0 = b*llx + d*lly + t.y
-      local x1 = a*urx + c*lly + t.x
-      local y1 = b*urx + d*lly + t.y
-      local x2 = a*llx + c*ury + t.x
-      local y2 = b*llx + d*ury + t.y
-      local x3 = a*urx + c*ury + t.x
-      local y3 = b*urx + d*ury + t.y
-
-      local E  = math.min(x0, x1, x2, x3)
-      local F  = math.min(y0, y1, y2, y3)
-
-      table.insert(options, string.format(
-        "cm={%s, %s, %s, %s, (%s, %s)}",
-        sround(a), sround(b), sround(c), sround(d), sround(E), sround(F)))
-
-      write(indent .. "\\begin{scope}")
-      if #options > 0 then write("[" .. table.concat(options, ", ") .. "]") end
-      write("\n")
-      if okpdf then
-        write(indent .. indent_amt ..
-          string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){\\includegraphics{%s}};\n",
-                        fname))
-      else
-        local bbox = safe_bbox(obj)
-        write(indent .. indent_amt .. "%% image export failed (one-object PDF)\n")
-        write(indent .. indent_amt .. "%% error: " .. tostring(errpdf) .. "\n")
-        write(indent .. indent_amt ..
-          string.format("%% Expected size: %sbp x %sbp\n",
-                        sround(bbox:width()), sround(bbox:height())))
-      end
-      write(indent .. "\\end{scope}\n")
-    end
-
-  else
-    -- Fallback (no rect): keep previous behavior
-    local v = matrix:translation()
-    if round(v.x) ~= 0 or round(v.y) ~= 0 then
-      table.insert(options, "shift={" .. svec(v) .. "}")
-    end
-    matrix_to_options(matrix, options)
-
-    write(indent .. "\\begin{scope}")
-    if #options > 0 then write("[" .. table.concat(options, ", ") .. "]") end
-    write("\n")
-    if okpdf then
-      write(indent .. indent_amt ..
-        string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){\\includegraphics{%s}};\n",
-                      fname))
-    else
-      local bbox = safe_bbox(obj)
-      write(indent .. indent_amt .. "%% image export failed (one-object PDF)\n")
-      write(indent .. indent_amt .. "%% error: " .. tostring(errpdf) .. "\n")
-      write(indent .. indent_amt ..
-        string.format("%% Expected size: %sbp x %sbp\n",
-                      sround(bbox:width()), sround(bbox:height())))
-    end
-    write(indent .. "\\end{scope}\n")
-  end
+	-- Exports bitmap images
+	local function write_to_pdf(obj, pdf_path)
+		-- Write the image object to a pdf
+		local doc  = ipe.Document()
+		local page = ipe.Page()
+		
+		local clone = obj:clone()
+		clone:set("transformations","affine") -- Full affine matrix (not just translations) is respected when cloning (Is this needed?)
+		page:insert(1, clone, 0, "alpha") -- From docs: p:insert(objno, object, select, layer)  -- objno == nil means append
+		
+		-- ensure single-page output
+		_G.pcall(function() doc:remove(1) end)
+		doc:insert(1, page)
+		doc:save(pdf_path)
+	end
+	
+	local function rect(obj)
+		-- Outputs the "rect" parameter of an image object. That is, outputs: 
+		--   Vector(lower left x, lower left y), Vector(upper right x, upper right y). 
+		--   Note that the position of the lower left corner of the image object is 
+		--   modified by the translation values in the matrix. For a matrix 
+		--   (m11, m21, m12, m22, t1, t2), the position of the image lower left corner 
+		--   will be (llx + t1,lly + t2)
+		
+		local xml_string = obj:xml()
+		-- Parse the xml for the param "rect": '()' captures, '%S+' = 1 or more of any characters except a space, '%s+' = 1 or more spaces
+		local llx_s,lly_s,urx_s,ury_s = xml_string:match('rect="(%S+)%s+(%S+)%s+(%S+)%s+(%S+)"')
+		local llx, lly, urx, ury = tonumber(llx_s), tonumber(lly_s), tonumber(urx_s), tonumber(ury_s) -- Convert from strings to numbers
+		return ipe.Vector(llx, lly), ipe.Vector(urx, ury)
+	end
+	
+	local ll,ur = rect(obj)
+	local t = matrix:translation()
+	
+	-- ---- Image export to PDF ------------------------------------------------
+	local outdir  = _outdir or "."
+	local fname   = model.params.name .. string.format("_img_%03d.pdf", _next_image_serial())
+	local pdf_path = outdir .. prefs.fsep .. fname
+	
+	local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path) end)
+	
+	-- ---- Build placement ----------------------------------------------------
+	
+	-- Transform each corner, then find the ll of the new bbox
+	img_ll = matrix * ll
+	img_lr = matrix * ipe.Vector(ur.x, ll.y)
+	img_ul = matrix * ipe.Vector(ll.x, ur.y)
+	img_ur = matrix * ur
+	local img_ll_new = ipe.Vector(math.min(img_ll.x, img_lr.x, img_ul.x, img_ur.x),
+								  math.min(img_ll.y, img_lr.y, img_ul.y, img_ur.y))
+	
+	-- ---- Write to tex file --------------------------------------------------
+		
+	local options = { "x=1bp", "y=1bp" }
+	if round(t.x) ~= 0 or round(t.y) ~= 0 then
+		table.insert(options, "shift={" .. svec(img_ll_new) .. "}")
+	end	
+	matrix_to_options(matrix, options)
+	write(indent .. "\\begin{scope}")
+	if #options > 0 then
+		write("[" .. table.concat(options, ", ") .. "]")
+	end
+	write("\n")
+	if okpdf then
+		write(indent .. indent_amt ..
+			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){\\includegraphics{%s}};\n",
+							fname))
+	else
+		write(indent .. indent_amt ..
+			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){Error: %s};\n",
+							errpdf))
+	end
+	write(indent .. "\\end{scope}\n")
 end
 
 --------------------------------------------------------------------------------
@@ -1606,7 +1487,15 @@ function export_object(model, obj, origin)
    elseif obj:type() == "reference" then
       export_mark(model, obj, matrix)
    elseif obj:type() == "image" then      -- <-- ADDED
-      export_image(model, obj, matrix)    -- <-- ADDED
+      if(model.params.do_text == true and _img_serial == 0) then
+        run_text_image_dialog(model) -- For first image, run text image dialog
+	  end
+	  if(params.name) then
+		export_image(model, obj, matrix)
+	  else
+	    ipeui.messageBox(nil, "warning", "No image name entered. Images will not be generated.", nil, "ok")
+		_next_image_serial()
+	  end
    else
       print("Exporting objects of type " .. obj:type() .. " is not supported.")
    end
@@ -1719,6 +1608,35 @@ function export_grid(size)
 end
 
 
+-- ADDED FOR IMAGES --
+-- Run a dialog for naming images when exporting as text
+function run_text_image_dialog(model)
+	-- File dialog
+	local curname = params.filename or model.file_name or "Untitled.tex"
+	local function extract_name()
+		local name
+		name = curname:match(prefs.basename_pattern)
+		-- maybe there was no "/" in the file name
+		if not name then name = curname end
+		name = name:match("(.*)%.[^.]+$")
+		return name
+	end
+	local d = ipeui.Dialog(model.ui:win(), "Name of Image File(s)")
+	d:add("labeltext","label",{label="Enter the root name for the image file(s):"}, 1, 1, 1, 3)
+	d:add("filenameinput","input",{}, 2, 1, 1, 3)
+	d:add("infotext", "label", {label="Images will be output in the same directory as this ipe document."}, 3, 1, 1, 3)
+	d:addButton("ok", "&Ok", "accept")
+    d:addButton("cancel", "&Cancel", "reject")
+	d:set("filenameinput", extract_name())
+
+	if not d:execute() then return nil end
+	
+	name = d:get("filenameinput")
+	params.name = name
+	return true
+end
+-- END ADDED FOR IMAGES --
+
 -- Run the export settings dialog
 function run_file_dialog(model)
    local d = ipeui.Dialog(model.ui:win(), "TikZ Export")
@@ -1766,8 +1684,6 @@ function run_file_dialog(model)
       if n then curname = n end
       d:set("filename", extract_name() .. ".tex")
    end
-   local name = extract_name()
-   curname = extract_dir() .. prefs.fsep .. name .. ".tex"
    d:add("label2", "label", {label="Output file"}, 6, 1)
    d:add("filename", "input", {}, 6, 2)
    d:set("filename", extract_name() .. ".tex")
@@ -1795,9 +1711,11 @@ function run_file_dialog(model)
    params.colors = d:get("colors")
    params.scopeonly = d:get("scope") and not d:get("fulldoc")
    params.drawgrid = d:get("drawgrid")
-   params.filename = curname
-   params.name = name
-
+   
+   -- ADDED FOR IMAGES --
+   params.filename = extract_dir() .. prefs.fsep .. extract_name() .. ".tex"
+   params.name = extract_name()
+   -- END ADDED FOR IMAGES --
    return true
 end
 
@@ -1857,9 +1775,11 @@ function run(model, num)
    -- Run the parameters dialog
    if do_file then
       params = params_file
+	  params.do_text = false --> Added for images
       if not run_file_dialog(model) then return end
    elseif do_text then
       params = params_text
+	  params.do_text = true --> Added for images
       if #model:selection() == 0 then
          ipeui.messageBox(
             model.ui:win(), "warning", "TikZ export error",
@@ -1870,19 +1790,14 @@ function run(model, num)
       if not run_text_dialog(model) then return end
    end
    
-   --ADDED FOR IMAGES
-   -- Resolve output/temp dirs for assets (images)
+   --NEW: ADDED FOR IMAGES
+   -- Resolve output/temp dirs for images
    _img_serial = 0
    if do_file then
       -- derive output directory from the file name
-      local dir = params.filename:match("^(.*)[/\\][^/\\]+$") or "."
-      _outdir = dir
-      _tmpdir = dir  -- write temps next to output so includegraphics paths are simple
+      _outdir = params.filename:match(prefs.dir_pattern) or prefs.save_as_directory
    else
       _outdir = nil
-      _tmpdir = nil
-      -- In text-object mode we deliberately avoid writing image files.
-      -- export_image() will emit placeholders.
    end
    --END ADDED FOR IMAGES
 
