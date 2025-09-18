@@ -3,24 +3,9 @@
 -- Author: Austin Stover
 ----------------------------------------------------------------------
 --[[
-	Copyright (C) 2025 Austin Stover
-	
-	ipe2tikz-images is free software; you can redistribute it and/or modify it under
-    the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 3 of the License, or (at your option)
-    any later version.
 
-    ipe2tikz-images is distributed in the hope that it will be useful, but WITHOUT ANY
-    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-    FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
-    details.
-
-    You should have received a copy of the GNU General Public License along with
-    ipe2tikz-images; if not, you can find it at "http://www.gnu.org/copyleft/gpl.html",
-    or write to the Free Software Foundation, Inc., 675 Mass Ave, Cambridge, MA
-    02139, USA.
-	
     Copyright (C) 2016  Joseph Rabinoff
+	Copyright (C) 2025 Austin Stover
 
     ipe2tikz is free software; you can redistribute it and/or modify it under
     the terms of the GNU General Public License as published by the Free
@@ -39,17 +24,12 @@
 
 --]]
 
---[[ --------------------------------------------------------------------
-ipe2tikz-images exports an ipe drawing (or selected ipe objects in the drawing) to 
-latex. It includes the ability to export images embedded in the drawing.
---------------------------------------------------------------------- ]]--
 
-
-label = "TikZ+Image export"
+label = "TikZ export"
 
 methods = {
-  { label="Export to File" },
-  { label="Export to Text Object" }
+   { label="Export to File", run=run },
+   { label="Export to Text Object", run=run }
 }
 
 about = "Export readable TikZ code"
@@ -62,14 +42,10 @@ write = _G.io.write
 indent_amt = "  "
 indent = ""
 
---------------------------------------------------------------------------------
--- (Dependencies Detection removed)
---------------------------------------------------------------------------------
-
--- paths used for asset emission during "Export to File"
+-- paths used for placing images during "Export to File"
 local _outdir = nil  -- set in run()
 
--- serial for naming exported images
+-- Function for numbering exported image files
 local _img_serial = 0
 local function _next_image_serial()
   _img_serial = _img_serial + 1
@@ -79,15 +55,6 @@ end
 --------------------------------------------------------------------------------
 -- Utility
 --------------------------------------------------------------------------------
-
---NEW utility for debugging
-local function print_message(s, details)
-  -- Print a string with a dialog box; s = String to Print, details = variable
-  --   to print
-  ipeui.messageBox(nil, "information", s, details, "ok")
-end
-
---OLD Utilities
 
 function concat_pairs(t, sep, order)
    local ret = ""
@@ -652,6 +619,35 @@ end
 
 
 --------------------------------------------------------------------------------
+-- Export reference
+--------------------------------------------------------------------------------
+
+-- References occur for marks (this case is handled in export_mark), but also
+-- when symbols are used. See https://ipe.otfried.org/manual/manual_20.html
+-- A symbol usually contains a group which could be exported by the export_group
+-- function. However, in addition to the matrix, a reference might also have a
+-- position paramter. This additional translation needs to be taken into account
+-- during export.
+function export_reference(model, obj, matrix)
+   -- First we need to find the name of the symbol
+   -- This is done using basic string processing
+   -- First extract xml string
+   local xml = obj:xml()
+   -- Next, find the substring name="whatever"
+   -- foo.-bar matches the shortest possible sequence starting with foo and
+   -- ending with bar
+   local name_tmp = string.sub(xml, string.find(xml, 'name=".-"'))
+   -- Next the part between the quotations marks will be extracted
+   local sym_name = string.sub(name_tmp, 7, string.len(name_tmp)-1)
+   -- Now we can look for the symbol in all our stylesheets
+   -- We assume that the symbol consists of a group
+   local group = model.doc:sheets():find("symbol", sym_name)
+   -- Both reference and group have a matrix, furthermore the reference might have
+   -- a position as well. The order of matrices matters of course
+   export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()))
+end
+
+--------------------------------------------------------------------------------
 -- Export text
 --------------------------------------------------------------------------------
 
@@ -671,23 +667,23 @@ function export_text(model, obj, matrix)
    local anchor
    local ha = obj:get("horizontalalignment")
    local va = obj:get("verticalalignment")
-   if minipage then ha = "left" end
+   -- if minipage then ha = "left" end
    if ha == "left" then
       if va == "bottom" then
          anchor = "south west"
       elseif va == "baseline" then
          anchor = "base west"
-      elseif va == "vcenter" then
+      elseif va == "vcenter" or va == "center" then
          anchor = "west"
       elseif va == "top" then
          anchor = "north west"
       end
-   elseif ha == "hcenter" then
+   elseif ha == "hcenter" or ha == "center" then
       if va == "bottom" then
          anchor = "south"
       elseif va == "baseline" then
          anchor = "base"
-      elseif va == "vcenter" then
+      elseif va == "vcenter" or va == "center" then
          anchor = "center"
       elseif va == "top" then
          anchor = "north"
@@ -697,7 +693,7 @@ function export_text(model, obj, matrix)
          anchor = "south east"
       elseif va == "baseline" then
          anchor = "base east"
-      elseif va == "vcenter" then
+      elseif va == "vcenter" or va == "center" then
          anchor = "east"
       elseif va == "top" then
          anchor = "north east"
@@ -813,9 +809,9 @@ function export_text(model, obj, matrix)
    local opacity = obj:get("opacity")
    local prepend = nil
    if params.stylesheets then prepend = "ipe opacity " end
-   opacity = string.gsub(opacity, "%%", "") -- strip %
    if opacity ~= "opaque" then
-      string_option(opacity, nil, options, prepend)
+      opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100)
+      string_option(opacity, "opacity", options, prepend)
    end
 
    write(indent .. "\\node")
@@ -1324,9 +1320,9 @@ function export_path(shape, mode, matrix, obj)
       local opacity = obj:get("opacity")
       local prepend = nil
       if params.stylesheets then prepend = "ipe opacity " end
-      opacity = string.gsub(opacity, "%%", "") -- strip %
       if opacity ~= "opaque" then
-         string_option(opacity, nil, options, prepend)
+         opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100)
+         string_option(opacity, "opacity", options, prepend)
       end
    end
 
@@ -1485,8 +1481,11 @@ function export_object(model, obj, origin)
    elseif obj:type() == "group" then
       export_group(model, obj, matrix)
    elseif obj:type() == "reference" then
-      export_mark(model, obj, matrix)
-   elseif obj:type() == "image" then      -- <-- ADDED
+      if not string.match(obj:get("markshape"), "undefined") then -- reference to a marker
+         export_mark(model, obj, matrix)
+      else -- reference to a general symbol
+         export_reference(model, obj, matrix)
+   elseif obj:type() == "image" then      -- <-- ADDED FOR IMAGES
       if(model.params.do_text == true and _img_serial == 0) then
         run_text_image_dialog(model) -- For first image, run text image dialog
 	  end
@@ -1881,6 +1880,7 @@ function run(model, num)
    -- TikZ environment
    local envname = "tikzpicture"
    if params.scopeonly then envname = "scope" end
+   write("\\resizebox{\\ipefigwidth}{!}{\n")
    write("\\begin{" .. envname .. "}")
    local options = {}
    if params.stylesheets then
@@ -1926,7 +1926,7 @@ function run(model, num)
       end
    end
 
-   model.params = params
+   model.params = params --> Added for images to pull params from the model
    for i, obj, sel, layer in page:objects() do
       -- Only export objects that appear in the current view
       if page:visible(model.vno, i) then
@@ -1937,6 +1937,7 @@ function run(model, num)
       end
    end
    write("\\end{" .. envname .. "}\n")
+   write("}\n")
 
    if params.fulldoc then
       write("\\end{document}\n")
