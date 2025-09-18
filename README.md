@@ -260,9 +260,9 @@ consists of the `ipe import` style, which contains (among other things):
 + Exporting bitmapped images is now supported.  Bitmapped images are 
   produced as individual pdfs. You will need `\usepackage{graphicx}` in the preamble to display them in the TikZ drawing.
 + Only the current page, and the current view on that page, are exported.
-+ The ipelet won't export symbols (marks and arrows) from stylesheets; these
-  have to be defined by hand in a TikZ style.  Note however that Ipe's standard
-  marks and arrows are already defined in `tikzlibraryipe.code.tex`.
++ Exporting symbols (marks and arrows) from stylesheets is now supported for
+  symbols with Ipe's normal marks and arrows. Symbols that use the special
+  attribute values `sym-stroke` and `sym-fill` are now supported.
 + The ipelet won't export tilings / fill patterns from stylesheets either;
   these must also be done by hand.  It requires a bit of work to define a new
   fill pattern in TikZ.  For this reason, only the fill patterns that are
@@ -282,3 +282,5 @@ consists of the `ipe import` style, which contains (among other things):
 + TikZ's math is done by TeX, so it suffers from some inaccuracy, and all
   numbers have to be kept rather small.  Crazy coordinate transformations may
   push the limits of what it can do.
++ Rerunning the ipelet after performing undo does not always function properly.
+  This is a known bug.
