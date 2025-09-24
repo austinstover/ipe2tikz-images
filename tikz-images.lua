@@ -607,7 +607,7 @@ end
 -- into the element objects' transformation matrices.
 --
 -- Relevant attributes: transformations
-function export_group(model, obj, matrix)
+function export_group(model, obj, matrix, parent_matrix)
    local options = {}
    local v = matrix:translation()
    if round(v.x) ~= 0 or round(v.y) ~= 0 then
@@ -627,10 +627,13 @@ function export_group(model, obj, matrix)
    if clip then
       export_path(model, clip, "clip", ipe.Matrix())
    end
-
+   
+   old_parent_matrix = parent_matrix
+   parent_matrix = parent_matrix * matrix --ADDED FOR IMAGES
    for i,element in ipairs(obj:elements()) do
-      export_object(model, element, ipe.Vector(0,0))
+      export_object(model, element, ipe.Vector(0,0), parent_matrix)
    end
+   parent_matrix = old_parent_matrix
    indent = old_indent
 
    write(indent .. "\\end{scope}\n")
@@ -652,7 +655,7 @@ end
 -- "sym-fill" attributes of child objects with their parent symbol attributes
 -- by setting the model params and calling the get(model, obj, prop) wrapper
 -- instead of obj:get(prop) for prop == "stroke" or "fill".
-function export_reference(model, obj, matrix)
+function export_reference(model, obj, matrix, parent_matrix)
    -- First we need to find the name of the symbol
    -- This is done using basic string processing
    -- First extract xml string
@@ -673,8 +676,8 @@ function export_reference(model, obj, matrix)
    
    -- Both reference and group have a matrix, furthermore the reference might have
    -- a position as well. The order of matrices matters of course
-   local ok, err = pcall(function()
-     export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()))
+   local ok, err = _G.pcall(function()
+     export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()), parent_matrix)
    end)
    
    -- Reset stroke and fill now
@@ -704,7 +707,6 @@ function export_text(model, obj, matrix)
    local anchor
    local ha = obj:get("horizontalalignment")
    local va = obj:get("verticalalignment")
-   if minipage then ha = "left" end
    if ha == "left" then
       if va == "bottom" then
          anchor = "south west"
@@ -891,22 +893,14 @@ end
 -- Export image
 --------------------------------------------------------------------------------
 
-function export_image(model, obj, matrix)
+function export_image(model, obj, matrix, parent_matrix)
 	-- Exports bitmap images
-	local function write_to_pdf(obj, pdf_path)
-		-- Write the image object to a pdf
-		local doc  = ipe.Document()
-		local page = ipe.Page()
-		
-		local clone = obj:clone()
-		clone:set("transformations","affine") -- Full affine matrix (not just translations) is respected when cloning (Is this needed?)
-		page:insert(1, clone, 0, "alpha") -- From docs: p:insert(objno, object, select, layer)  -- objno == nil means append
-		
-		-- ensure single-page output
-		_G.pcall(function() doc:remove(1) end)
-		doc:insert(1, page)
-		doc:save(pdf_path)
-	end
+	--
+	-- TODO: Images are currently saved to pdf based on their current matrix (but excluding their parent matrix), so rotation/shearing
+	-- of an image is embedded in the saved pdf but not r/s that occurs due to r/s of parent groups. Tex \scopes do not transform the 
+	-- included graphics themselves. Likely need to embed total rotation+shearing into pdf before saving. \scopes also do not resize
+	-- graphics. Need to set the size of the graphic via `includegraphics[width=[width]]` where the width is the image width after all 
+	-- transformations: the new pdf width `bbox_size_new.x`
 	
 	local function rect(obj)
 		-- Outputs the "rect" parameter of an image object. That is, outputs: 
@@ -923,46 +917,110 @@ function export_image(model, obj, matrix)
 		return ipe.Vector(llx, lly), ipe.Vector(urx, ury)
 	end
 	
-	local ll,ur = rect(obj)
-	local t = matrix:translation()
+	local function transformed_bbox(obj, transform_matrix)
+		-- Outputs the new bbox after transforming an image with the given lower left 
+		-- (image_ll) and upper right (image_ur) corner vectors.
+		
+		image_ll, image_ur = rect(obj)
+		
+		corner_ll = transform_matrix * image_ll
+		corner_lr = transform_matrix * ipe.Vector(image_ur.x, image_ll.y)
+		corner_ul = transform_matrix * ipe.Vector(image_ll.x, image_ur.y)
+		corner_ur = transform_matrix * image_ur
+		local transformed_ll = ipe.Vector(math.min(corner_ll.x, corner_lr.x, corner_ul.x, corner_ur.x),
+										  math.min(corner_ll.y, corner_lr.y, corner_ul.y, corner_ur.y))
+		local transformed_ur = ipe.Vector(math.max(corner_ll.x, corner_lr.x, corner_ul.x, corner_ur.x),
+										  math.max(corner_ll.y, corner_lr.y, corner_ul.y, corner_ur.y))
+		
+		return transformed_ll, transformed_ur 
+	end
+		
 	
+	local function write_to_pdf(obj, pdf_path, parent_matrix)
+		-- TODO: Since we create a new document and page here, this might be causing the undo bug
+		--print_message("Parent matrix", table.concat(parent_matrix:elements(), ", "))
+		--print_message("Matrix", table.concat(matrix:elements(), ", "))
+		
+		-- Write the image object to a pdf
+		local doc  = ipe.Document()
+		local page = ipe.Page()
+		
+		local clone = obj:clone()
+		clone:set("transformations","affine") -- So full affine matrix (not just translations) respected when cloning
+		
+		
+		-- local m = parent_matrix:elements()
+		-- m11 = m[1]; m21 = m[2]; m12 = m[3]; m22 = m[4]; t1 = m[5]; t2 = m[6]
+		-- transform = ipe.Matrix(1, m21, m12, m22/m11) --Ensure no scaling of image
+		transform = parent_matrix * clone:matrix()
+		ll, ur = transformed_bbox(obj, transform)
+		
+		
+		clone:setMatrix(ipe.Translation(-ll) * transform) --Include image transformation from parent matrix in image output
+		
+		page:insert(1, clone,     0, "alpha") -- From docs: p:insert(objno, object, select, layer)  -- objno == nil means append
+		local nb = page:bbox(1)
+		
+		-- ensure single-page output
+		_G.pcall(function() doc:remove(1) end)
+		doc:insert(1, page)
+		
+		--Now set the sheet size
+		origin = ipe.Vector(0, 0)
+		papersize = ur - ll
+		local xml = string.format( -- Crop to transformed image
+								  '<ipestyle name="auto-crop"><layout paper="%.6f %.6f" origin="%.6f %.6f" frame="%.6f %.6f" crop="yes"/></ipestyle>',
+								  papersize.x, papersize.y, origin.x, origin.y, papersize.x, papersize.y)
+		
+		local overlay = ipe.Sheet(nil, xml) --New stylesheet
+		sheets = doc:sheets()
+		
+		local sheets = doc:sheets()
+		sheets:insert(1, overlay)
+		
+		doc:save(pdf_path)
+	end
+		
 	-- ---- Image export to PDF ------------------------------------------------
 	local outdir  = _outdir or "."
 	local fname   = model.params.name .. string.format("_img_%03d.pdf", _next_image_serial())
 	local pdf_path = outdir .. prefs.fsep .. fname
 	
-	local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path) end)
+	local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path, parent_matrix) end)
 	
 	-- ---- Build placement ----------------------------------------------------
 	
-	-- Transform each corner, then find the ll of the new bbox
-	img_ll = matrix * ll
-	img_lr = matrix * ipe.Vector(ur.x, ll.y)
-	img_ul = matrix * ipe.Vector(ll.x, ur.y)
-	img_ur = matrix * ur
-	local img_ll_new = ipe.Vector(math.min(img_ll.x, img_lr.x, img_ul.x, img_ur.x),
-								  math.min(img_ll.y, img_lr.y, img_ul.y, img_ur.y))
+	-- Transform each corner, then find the new bbox
+	total_matrix = parent_matrix * matrix
+	local img_ll_world , img_ur_world = transformed_bbox(obj, total_matrix)
+	local bbox_size_total = img_ur_world - img_ll_world --Bbox size comes from total matrix transform
+	
+	-- Convert world ll corner to the parent scope's local coordinates:
+	local img_ll_parent = parent_matrix:inverse() * img_ll_world -- p_local = inv(Lp) * (p - tp) = inv(P) i.e. inverse of 
+	
 	
 	-- ---- Write to tex file --------------------------------------------------
 		
-	local options = { "x=1bp", "y=1bp" }
-	if round(img_ll_new.x) ~= 0 or round(img_ll_new.y) ~= 0 then
-		table.insert(options, "shift={" .. svec(img_ll_new) .. "}")
-	end	
-	matrix_to_options(matrix, options)
+	-- local options = { "x=1bp", "y=1bp" }
+	-- if round(img_ll_parent.x) ~= 0 or round(img_ll_parent.y) ~= 0 then -- Apply shift after matrix transform (i.e. in parent scope's local coords)
+	-- 	table.insert(options, "shift={" .. svec(img_ll_parent) .. "}")
+	-- end
+	-- Do transformations (linear part of the matrix).  This must come *after*
+    -- the shift options, since it should be applied before the shift.
+	-- matrix_to_options(matrix, options)
 	write(indent .. "\\begin{scope}")
-	if #options > 0 then
-		write("[" .. table.concat(options, ", ") .. "]")
-	end
+	-- if #options > 0 then
+	-- 	write("[" .. table.concat(options, ", ") .. "]")
+	-- end
 	write("\n")
 	if okpdf then
 		write(indent .. indent_amt ..
-			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){\\includegraphics{%s}};\n",
-							fname))
+			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at %s{\\includegraphics[width=%sbp]{%s}};\n",
+							svec(img_ll_parent),sround(bbox_size_total.x),fname))
 	else
 		write(indent .. indent_amt ..
 			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){Error: %s};\n",
-							errpdf))
+							errpdf:gsub("\\","/")))
 	end
 	write(indent .. "\\end{scope}\n")
 end
@@ -1491,9 +1549,11 @@ end
 --------------------------------------------------------------------------------
 
 -- origin is a transformation to apply after all others.
-function export_object(model, obj, origin)
+function export_object(model, obj, origin, parent_matrix)
    -- The object's properties can specify that only the translation part of
    -- the matrix should apply, or only the "rigid part".  Do that now.
+   parent_matrix = parent_matrix or ipe.Matrix(1,0,0,1) --ADDED FOR IMAGES
+   
    local matrix = obj:matrix()
    if obj:type() ~= "text" and obj:type() ~= "reference" then
       -- this attribute is handled differently by text and reference objects
@@ -1516,19 +1576,19 @@ function export_object(model, obj, origin)
    elseif obj:type() == "text" then
       export_text(model, obj, matrix)
    elseif obj:type() == "group" then
-      export_group(model, obj, matrix)
+      export_group(model, obj, matrix, parent_matrix)
    elseif obj:type() == "reference" then
       if not string.match(obj:get("markshape"), "undefined") then -- reference to a marker
          export_mark(model, obj, matrix)
       else -- reference to a general symbol
-         export_reference(model, obj, matrix)
+         export_reference(model, obj, matrix, parent_matrix)
 	  end
    elseif obj:type() == "image" then      -- <-- ADDED FOR IMAGES
       if(model.params.do_text == true and _img_serial == 0) then
         run_text_image_dialog(model) -- For first image, run text image dialog
 	  end
 	  if(params.name) then
-		export_image(model, obj, matrix)
+		export_image(model, obj, matrix, parent_matrix)
 	  else
 	    ipeui.messageBox(nil, "warning", "No image name entered. Images will not be generated.", nil, "ok")
 		_next_image_serial()

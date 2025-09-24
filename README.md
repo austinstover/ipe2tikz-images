@@ -257,12 +257,14 @@ consists of the `ipe import` style, which contains (among other things):
 + Exporting gradients and effects is not supported.  Gradients could in theory
   be exported as shades, if someone wanted to code it.  Effects probably cannot
   be implemented within PGF/TikZ.
-+ Exporting bitmapped images is now supported.  Bitmapped images are 
-  produced as individual pdfs. You will need `\usepackage{graphicx}` in the preamble to display them in the TikZ drawing.
++ Exporting embedded images is now supported. Embedded images are 
+  saved as individual pdfs. You will need `\usepackage{graphicx}` in your 
+  document preamble to display them in your TikZ drawing.
 + Only the current page, and the current view on that page, are exported.
 + Exporting symbols (marks and arrows) from stylesheets is now supported for
   symbols with Ipe's normal marks and arrows. Symbols that use the special
-  attribute values `sym-stroke` and `sym-fill` are now supported.
+  attribute values `sym-stroke` and `sym-fill` are now supported. However,
+  other marks and arrows may not be supported.
 + The ipelet won't export tilings / fill patterns from stylesheets either;
   these must also be done by hand.  It requires a bit of work to define a new
   fill pattern in TikZ.  For this reason, only the fill patterns that are
