@@ -973,7 +973,6 @@ function export_image(model, obj, matrix, parent_matrix)
 								  papersize.x, papersize.y, origin.x, origin.y, papersize.x, papersize.y)
 		
 		local overlay = ipe.Sheet(nil, xml) --New stylesheet
-		sheets = doc:sheets()
 		
 		local sheets = doc:sheets()
 		sheets:insert(1, overlay)
@@ -1865,6 +1864,7 @@ function run(model, num)
 
    local page = model:page()
    local sheets = model.doc:sheets()
+   _img_serial = 0 --ADDED FOR IMAGES
 
    -- indentation (global)
    indent = ""
@@ -1887,9 +1887,8 @@ function run(model, num)
       if not run_text_dialog(model) then return end
    end
    
-   --NEW: ADDED FOR IMAGES
+   --ADDED FOR IMAGES
    -- Resolve output/temp dirs for images
-   _img_serial = 0
    if do_file then
       -- derive output directory from the file name
       _outdir = params.filename:match(prefs.dir_pattern) or prefs.save_as_directory
