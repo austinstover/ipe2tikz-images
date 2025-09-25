@@ -1,14 +1,15 @@
 ipe2tikz-images
 ========
-
-The main repository is not maintained.  The software is licensed under
-the GPL; so I forked it and fixed a few bugs.
-
 This is a TikZ exporter ipelet: a plugin for [Ipe](http://ipe.otfried.org/) that
 exports **readable** [TikZ](https://sourceforge.net/projects/pgf/) pictures for
 use in LaTeX documents.
 
-It was forked from the fantastic [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz).
+It was forked from the fantastic [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz), and tweaked to export images embedded in the ipe document into the TikZ picture.
+
+## Known Bugs
+This ipelet is still under development. While exporting images works under most use-cases, there are still some bugs.
++ Rerunning the ipelet after performing an export (especially after an `undo`) does not always function properly.
++ Performing `undo` after exporting can sometimes cause crashes, and `redo` does not always work.
 
 If you choose "Export to file", then you should place the tex output and images this ipelet produces into your latex document directory so that they
 can be referenced and displayed from the TikZ picture. If you have embedded images, include `\usepackage{graphicx}` in your latex preamble. If you choose "Export to text object", then you will be given the option to choose the root
@@ -284,5 +285,3 @@ consists of the `ipe import` style, which contains (among other things):
 + TikZ's math is done by TeX, so it suffers from some inaccuracy, and all
   numbers have to be kept rather small.  Crazy coordinate transformations may
   push the limits of what it can do.
-+ Rerunning the ipelet after performing undo does not always function properly.
-  This is a known bug.

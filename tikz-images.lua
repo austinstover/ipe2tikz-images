@@ -902,37 +902,13 @@ function export_image(model, obj, matrix, parent_matrix)
 	-- graphics. Need to set the size of the graphic via `includegraphics[width=[width]]` where the width is the image width after all 
 	-- transformations: the new pdf width `bbox_size_new.x`
 	
-	local function rect(obj)
-		-- Outputs the "rect" parameter of an image object. That is, outputs: 
-		--   Vector(lower left x, lower left y), Vector(upper right x, upper right y). 
-		--   Note that the position of the lower left corner of the image object is 
-		--   modified by the translation values in the matrix. For a matrix 
-		--   (m11, m21, m12, m22, t1, t2), the position of the image lower left corner 
-		--   will be (llx + t1,lly + t2)
-		
-		local xml_string = obj:xml()
-		-- Parse the xml for the param "rect": '()' captures, '%S+' = 1 or more of any characters except a space, '%s+' = 1 or more spaces
-		local llx_s,lly_s,urx_s,ury_s = xml_string:match('rect="(%S+)%s+(%S+)%s+(%S+)%s+(%S+)"')
-		local llx, lly, urx, ury = tonumber(llx_s), tonumber(lly_s), tonumber(urx_s), tonumber(ury_s) -- Convert from strings to numbers
-		return ipe.Vector(llx, lly), ipe.Vector(urx, ury)
-	end
-	
 	local function transformed_bbox(obj, transform_matrix)
-		-- Outputs the new bbox after transforming an image with the given lower left 
-		-- (image_ll) and upper right (image_ur) corner vectors.
+		-- Outputs the new bbox after transforming an object. Returns ll, ur vectors.
 		
-		image_ll, image_ur = rect(obj)
-		
-		corner_ll = transform_matrix * image_ll
-		corner_lr = transform_matrix * ipe.Vector(image_ur.x, image_ll.y)
-		corner_ul = transform_matrix * ipe.Vector(image_ll.x, image_ur.y)
-		corner_ur = transform_matrix * image_ur
-		local transformed_ll = ipe.Vector(math.min(corner_ll.x, corner_lr.x, corner_ul.x, corner_ur.x),
-										  math.min(corner_ll.y, corner_lr.y, corner_ul.y, corner_ur.y))
-		local transformed_ur = ipe.Vector(math.max(corner_ll.x, corner_lr.x, corner_ul.x, corner_ur.x),
-										  math.max(corner_ll.y, corner_lr.y, corner_ul.y, corner_ur.y))
-		
-		return transformed_ll, transformed_ur 
+		local r = ipe.Rect()
+		obj:addToBBox(r, parent_matrix, false) --Find new image bbox after applying the transformation
+				
+		return r:bottomLeft(), r:topRight()
 	end
 		
 	
@@ -982,7 +958,8 @@ function export_image(model, obj, matrix, parent_matrix)
 		
 	-- ---- Image export to PDF ------------------------------------------------
 	local outdir  = _outdir or "."
-	local fname   = model.params.name .. string.format("_img_%03d.pdf", _next_image_serial())
+	local image_serial = _next_image_serial()
+	local fname   = model.params.name .. string.format("_img_%03d.pdf", image_serial)
 	local pdf_path = outdir .. prefs.fsep .. fname
 	
 	local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path, parent_matrix) end)
@@ -995,7 +972,15 @@ function export_image(model, obj, matrix, parent_matrix)
 	local bbox_size_total = img_ur_world - img_ll_world --Bbox size comes from total matrix transform
 	
 	-- Convert world ll corner to the parent scope's local coordinates:
-	local img_ll_parent = parent_matrix:inverse() * img_ll_world -- p_local = inv(Lp) * (p - tp) = inv(P) i.e. inverse of 
+	epsilon = 1e-12
+	local img_ll_parent = nil
+	if not parent_matrix:isSingular(epsilon) then
+		img_ll_parent = parent_matrix:inverse() * img_ll_world -- p_local = inv(Lp) * (p - tp) = inv(P) i.e. inverse of affine transformation
+	else
+		img_ll_parent = img_ll_world --If no inverse, don't even try
+		ipeui.messageBox(model.ui:win(), "warning",
+						 string.format("Can't convert image img_%03d properly; has a singular matrix transformation", image_serial), e, nil)
+	end
 	
 	
 	-- ---- Write to tex file --------------------------------------------------
