@@ -2,25 +2,26 @@ ipe2tikz-images
 ========
 This is a TikZ exporter ipelet: a plugin for [Ipe](http://ipe.otfried.org/) that
 exports **readable** [TikZ](https://sourceforge.net/projects/pgf/) pictures for
-use in LaTeX documents, including embedded bitmaps (i.e. imported images).
+use in LaTeX documents.
 
-It was forked from [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz),
-and tweaked to export images embedded as bitmaps in the ipe document into the TikZ picture.
+It was forked from the fantastic [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz), and modified to export images embedded in the ipe document into the TikZ picture.
 
 If you choose "Export to file", then you should place the tex output and images this ipelet produces into your latex document directory so that they
-can be referenced and displayed from the TikZ picture. Use `\usepackage{graphicx}` in your latex preamble. If you choose "Export to text object", then you will be given the option to choose the root
-file name of any selected images; they will automatically be placed in the same directory as the ipe document.
+can be referenced and displayed from the TikZ picture. If you have embedded images, include `\usepackage{graphicx}` in your latex preamble. If you choose "Export to text object", then you will be given the option to choose the root file name of any selected images; they will automatically be placed in the same directory as the ipe document.
 
 ![ipe window](example.png)
 
 yields
 
 ```latex
-\begin{tikzpicture}[ipe import]
+\begin{tikzpicture}[ipe import, baseline, trim left]
+  \begin{scope}[shift={(-288, -400)}]
+    \clip
+      (304, 416) circle[radius=16];
+    \node[anchor=south west, inner sep=0, outer sep=0] at (287.9998, 400.0005){\includegraphics[width=32bp]{Example_img_001.pdf}};
+  \end{scope}
   \draw[red, thick]
-    (16, 48) rectangle (48, 16);
-  \filldraw[fill=blue, semitransparent]
-    (32, 32) circle[radius=16];
+    (0, 32) rectangle (32, 0);
 \end{tikzpicture}
 ```
 
@@ -38,8 +39,8 @@ to specify most drawing parameters.
 
 1. Copy `tikz.isy` into `~/.ipe/styles` on Linux and Macs.  On Windows, I
    believe you have to use the directory containing the built-in stylesheets.
-2. Copy `tikz-images.lua` into `~/.ipe/ipelets` on Linux and Macs, and into
-   `$USERPROFILE\Ipelets` on Windows.
+2. Copy `tikz.lua` into `~/.ipe/ipelets` on Linux and Macs, and into
+   `%USERPROFILE%\Ipelets` on Windows.
 3. Copy `tikzlibraryipe.code.tex` somewhere LaTeX can find it, e.g. the same
    directory as the LaTeX file you're trying to compile.  Or you can follow
    [these instructions](https://tex.stackexchange.com/questions/187193/how-to-install-tikz-pgf-libraries?rq=1).
@@ -100,7 +101,7 @@ others: see [limitations](#limitations) below.
 
 In this mode, the ipelet creates a file with the TikZ code necessary to
 reproduce the current view on the current page.  This is suitable for
-`\input`ting or copying into a LaTeX document.
+`\input`ting or copying into a LaTeX document.  
 
 Select *Export to File* from the *TikZ Export* submenu in the ipelets menu, or
 use the shortcut `Alt+T`.  A dialog appears, with the following options:
@@ -123,7 +124,7 @@ use the shortcut `Alt+T`.  A dialog appears, with the following options:
   document* is checked.
 + *Export grid:* if desired, you can export Ipe's grid as well.  This is useful
   for debugging the placement of objects.
-+ *Output file:* this is where the TikZ code goes (as well as any embedded images, as pdfs).
++ *Output file:* this is where the TikZ code goes. Any embedded images will be placed as separate pdfs in the same directory.
 
 If *Export complete document* is unchecked and a coordinate system is defined,
 the origin of the coordinate system becomes TikZ's origin.
@@ -138,7 +139,7 @@ useful for the following kind of workflow:
 2. Convert it in-place to TikZ.
 3. Edit the TikZ code in the Ipe textbox, and use the Apply button to
    immediately see your changes while editing.
-4. Copy-paste the resulting TikZ picture to a LaTeX document. If you use any embedded images in this picture, then you'll need to find those in the same directory as your ipe document and move these to your LaTeX document directory.
+4. Copy-paste the resulting TikZ picture to a LaTeX document. If you use any embedded images, then you will find those in the same directory as your ipe document. You will need these to be in your LaTeX document directory.
 
 For this to work, you must have Ipe 7.2.6+ installed, and you need to put
 `tikzlibraryipe.code.tex` either in `~/.ipe/latexrun`, or somewhere in your
@@ -179,7 +180,8 @@ you want to dig for details.  In summary:
 + Text objects are exported to TikZ nodes, with the `ipe node` style.
 + Group objects are exported to TikZ scopes.  The clipping path, if it exists,
   becomes a `\clip` path in the scope.
-+ Reference objects (marks) are exported to TikZ `\pic` commands.
++ Reference objects (marks) are exported to TikZ `\pic` commands. **NEW** Many 
+  symbols may also be exported as reference objects.
 + **NEW** Image objects are exported to TikZ `\includegraphics` commands.
 + If configured to do so, the stylesheet cascade is exported to a TikZ style
   called `ipe stylesheet`.
@@ -254,12 +256,14 @@ consists of the `ipe import` style, which contains (among other things):
 + Exporting gradients and effects is not supported.  Gradients could in theory
   be exported as shades, if someone wanted to code it.  Effects probably cannot
   be implemented within PGF/TikZ.
-+ **NEW** Exporting bitmapped images is now supported.  Bitmapped images are 
-  produced as output pdfs.
++ **NEW** Exporting embedded images is now supported. Embedded images are 
+  saved as individual pdfs. You will need `\usepackage{graphicx}` in your 
+  document preamble to display them in your TikZ drawing.
 + Only the current page, and the current view on that page, are exported.
-+ The ipelet won't export symbols (marks and arrows) from stylesheets; these
-  have to be defined by hand in a TikZ style.  Note however that Ipe's standard
-  marks and arrows are already defined in `tikzlibraryipe.code.tex`.
++ **NEW** Exporting symbols (marks and arrows) from stylesheets is now supported for
+  symbols with Ipe's normal marks and arrows. Symbols that use the special
+  attribute values `sym-stroke` and `sym-fill` are now supported. However,
+  other marks and arrows may not be supported.
 + The ipelet won't export tilings / fill patterns from stylesheets either;
   these must also be done by hand.  It requires a bit of work to define a new
   fill pattern in TikZ.  For this reason, only the fill patterns that are

@@ -3,8 +3,8 @@
 -- Author: Austin Stover
 ----------------------------------------------------------------------
 --[[
-	Copyright (C) 2025 Austin Stover
-	
+	Copyright (C) 2025  Austin Stover
+
 	ipe2tikz-images is free software; you can redistribute it and/or modify it under
     the terms of the GNU General Public License as published by the Free
     Software Foundation; either version 3 of the License, or (at your option)
@@ -39,17 +39,12 @@
 
 --]]
 
---[[ --------------------------------------------------------------------
-ipe2tikz-images exports an ipe drawing (or selected ipe objects in the drawing) to 
-latex. It includes the ability to export images embedded in the drawing.
---------------------------------------------------------------------- ]]--
 
-
-label = "TikZ+Image export"
+label = "TikZ+images export"
 
 methods = {
-  { label="Export to File" },
-  { label="Export to Text Object" }
+   { label="Export to File", run=run },
+   { label="Export to Text Object", run=run }
 }
 
 about = "Export readable TikZ code"
@@ -58,36 +53,41 @@ shortcuts.ipelet_1_tikz = "Alt+T"
 shortcuts.ipelet_2_tikz = "Ctrl+Shift+T"
 
 -- Globals
-write = _G.io.write
-indent_amt = "  "
-indent = ""
+local write = _G.io.write
+local indent_amt = "  "
+local indent = ""
 
---------------------------------------------------------------------------------
--- (Dependencies Detection removed)
---------------------------------------------------------------------------------
-
--- paths used for asset emission during "Export to File"
+-- paths used for placing images during "Export to File"
 local _outdir = nil  -- set in run()
 
--- serial for naming exported images
-local _img_serial = 0
-local function _next_image_serial()
-  _img_serial = _img_serial + 1
-  return _img_serial
+-- Function for numbering exported image files
+function _next_image_serial(model)
+  model.img_serial = model.img_serial + 1
+  return model.img_serial
 end
 
 --------------------------------------------------------------------------------
 -- Utility
 --------------------------------------------------------------------------------
 
---NEW utility for debugging
-local function print_message(s, details)
+-- For debugging
+function print_message(s, details)
   -- Print a string with a dialog box; s = String to Print, details = variable
   --   to print
   ipeui.messageBox(nil, "information", s, details, "ok")
 end
 
---OLD Utilities
+function get(model, obj, prop)
+	-- For symbols, replace stroke and fill of inner elements with that of symbol
+	--   Since we don't know a priori which elements are members of a symbol, we
+	--   need to wrap all obj:get("stroke") and obj:get("fill") calls in this
+	--   function, which returns the higher level stroke and fill, saved when
+	--	 the symbol is found in the element tree in params.
+	got = obj:get(prop)
+	if prop == "stroke" and got == "sym-stroke" then return params.sym_stroke or "" end
+    if prop == "fill"   and got == "sym-fill"   then return params.sym_fill or ""   end
+	return got
+end
 
 function concat_pairs(t, sep, order)
    local ret = ""
@@ -589,12 +589,12 @@ function export_mark(model, obj, matrix)
 
    -- draw and fill
    if drawing then
-      if obj:get("stroke") ~= "black" then
-         color_option(obj:get("stroke"), "draw", options, nil, not filling)
+      if get(model, obj, "stroke") ~= "black" then
+         color_option(get(model, obj, "stroke"), "draw", options, nil, not filling)
       end
    end
    if filling then
-      color_option(obj:get("fill"), "fill", options, nil, not drawing)
+      color_option(get(model, obj, "fill"), "fill", options, nil, not drawing)
    end
 
    write(indent .. "\\pic")
@@ -621,7 +621,7 @@ end
 -- into the element objects' transformation matrices.
 --
 -- Relevant attributes: transformations
-function export_group(model, obj, matrix)
+function export_group(model, obj, matrix, parent_matrix, obj_indices)
    local options = {}
    local v = matrix:translation()
    if round(v.x) ~= 0 or round(v.y) ~= 0 then
@@ -639,17 +639,71 @@ function export_group(model, obj, matrix)
 
    local clip = obj:clip()
    if clip then
-      export_path(clip, "clip", ipe.Matrix())
+      export_path(model, clip, "clip", ipe.Matrix())
    end
-
+   
+   local old_parent_matrix = parent_matrix
+   parent_matrix = parent_matrix * matrix --ADDED FOR IMAGES
    for i,element in ipairs(obj:elements()) do
-      export_object(model, element, ipe.Vector(0,0))
+      element_indices = {table.unpack(obj_indices)}
+	  table.insert(element_indices, i)
+      export_object(model, element, ipe.Vector(0,0), parent_matrix, element_indices)
    end
+   parent_matrix = old_parent_matrix
    indent = old_indent
 
    write(indent .. "\\end{scope}\n")
 end
 
+
+--------------------------------------------------------------------------------
+-- Export reference
+--------------------------------------------------------------------------------
+
+-- References occur for marks (this case is handled in export_mark), but also
+-- when symbols are used. See https://ipe.otfried.org/manual/manual_20.html
+-- A symbol usually contains a group which could be exported by the export_group
+-- function. However, in addition to the matrix, a reference might also have a
+-- position paramter. This additional translation needs to be taken into account
+-- during export.
+-- When a symbol uses stroke="sym-stroke" or fill="sym-fill", it really means we 
+-- need to use the toplevel stroke or fill. So we replace the "sym-stroke" or 
+-- "sym-fill" attributes of child objects with their parent symbol attributes
+-- by setting the params and calling the get(model, obj, prop) wrapper instead 
+-- of obj:get(prop) for prop == "stroke" or "fill".
+function export_reference(model, obj, matrix, parent_matrix, obj_indices)
+   -- First we need to find the name of the symbol
+   -- This is done using basic string processing
+   -- First extract xml string
+   local xml = obj:xml()
+   -- Next, find the substring name="whatever"
+   -- foo.-bar matches the shortest possible sequence starting with foo and
+   -- ending with bar
+   local name_tmp = string.sub(xml, string.find(xml, 'name=".-"'))
+   -- Next the part between the quotations marks will be extracted
+   local sym_name = string.sub(name_tmp, 7, string.len(name_tmp)-1)
+   -- Now we can look for the symbol in all our stylesheets
+   -- We assume that the symbol consists of a group
+   local group = model.doc:sheets():find("symbol", sym_name)
+   
+   table.insert(obj_indices,sym_name) -- Use the symbol name string as the index to denote a symbol
+   
+   -- Set stroke and fill attributes to replace stroke="sym-stroke" or fill="sym-fill"
+   params.sym_stroke = obj:get("stroke")
+   params.sym_fill   = obj:get("fill")
+   
+   -- Both reference and group have a matrix, furthermore the reference might have
+   -- a position as well. The order of matrices matters of course
+   local ok, err = _G.pcall(function()
+     export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()), parent_matrix, obj_indices)
+   end)
+   
+   -- Reset stroke and fill now
+   params.sym_stroke = nil
+   params.sym_fill   = nil
+   
+   if not ok then error(err) end
+end
 
 --------------------------------------------------------------------------------
 -- Export text
@@ -671,7 +725,6 @@ function export_text(model, obj, matrix)
    local anchor
    local ha = obj:get("horizontalalignment")
    local va = obj:get("verticalalignment")
-   if minipage then ha = "left" end
    if ha == "left" then
       if va == "bottom" then
          anchor = "south west"
@@ -805,17 +858,22 @@ function export_text(model, obj, matrix)
    end
 
    -- color
-   if obj:get("stroke") ~= "black" then
-      color_option(obj:get("stroke"), "text", options)
+   if get(model, obj, "stroke") ~= "black" then
+      color_option(get(model, obj, "stroke"), "text", options)
    end
 
    -- opacity is always a symbolic name in ipe
    local opacity = obj:get("opacity")
    local prepend = nil
    if params.stylesheets then prepend = "ipe opacity " end
-   opacity = string.gsub(opacity, "%%", "") -- strip %
    if opacity ~= "opaque" then
-      string_option(opacity, nil, options, prepend)
+      if(params.stylesheets) then
+         opacity = string.gsub(opacity, "%%", "") -- strip %; opacity is a number
+         string_option(opacity, nil, options, prepend)
+      else --using TikZ styles
+         opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100) -- opacity is a decimal
+         string_option(opacity, "opacity", options, prepend)
+      end
    end
 
    write(indent .. "\\node")
@@ -858,80 +916,145 @@ end
 -- Export image
 --------------------------------------------------------------------------------
 
-function export_image(model, obj, matrix)
-	-- Exports bitmap images
-	local function write_to_pdf(obj, pdf_path)
-		-- Write the image object to a pdf
-		local doc  = ipe.Document()
-		local page = ipe.Page()
-		
-		local clone = obj:clone()
-		clone:set("transformations","affine") -- Full affine matrix (not just translations) is respected when cloning (Is this needed?)
-		page:insert(1, clone, 0, "alpha") -- From docs: p:insert(objno, object, select, layer)  -- objno == nil means append
-		
-		-- ensure single-page output
-		_G.pcall(function() doc:remove(1) end)
-		doc:insert(1, page)
-		doc:save(pdf_path)
-	end
+local function transformed_bbox(image_obj, transform_matrix)
+	-- Outputs the new bbox after transforming an image with the given lower left 
+	-- (image_ll) and upper right (image_ur) corner vectors.
 	
-	local function rect(obj)
-		-- Outputs the "rect" parameter of an image object. That is, outputs: 
+	local function rect(image_obj)
+		-- Outputs the "rect" parameter of an image object. That is, outputs:
 		--   Vector(lower left x, lower left y), Vector(upper right x, upper right y). 
 		--   Note that the position of the lower left corner of the image object is 
-		--   modified by the translation values in the matrix. For a matrix 
+		--   modified by the translation values in the matrix. For an image with matrix 
 		--   (m11, m21, m12, m22, t1, t2), the position of the image lower left corner 
 		--   will be (llx + t1,lly + t2)
 		
-		local xml_string = obj:xml()
+		local xml_string = image_obj:xml()
 		-- Parse the xml for the param "rect": '()' captures, '%S+' = 1 or more of any characters except a space, '%s+' = 1 or more spaces
 		local llx_s,lly_s,urx_s,ury_s = xml_string:match('rect="(%S+)%s+(%S+)%s+(%S+)%s+(%S+)"')
 		local llx, lly, urx, ury = tonumber(llx_s), tonumber(lly_s), tonumber(urx_s), tonumber(ury_s) -- Convert from strings to numbers
 		return ipe.Vector(llx, lly), ipe.Vector(urx, ury)
 	end
 	
-	local ll,ur = rect(obj)
-	local t = matrix:translation()
+	image_ll, image_ur = rect(image_obj)
 	
+	corner_ll = transform_matrix * image_ll
+	corner_lr = transform_matrix * ipe.Vector(image_ur.x, image_ll.y)
+	corner_ul = transform_matrix * ipe.Vector(image_ll.x, image_ur.y)
+	corner_ur = transform_matrix * image_ur
+	local transformed_ll = ipe.Vector(math.min(corner_ll.x, corner_lr.x, corner_ul.x, corner_ur.x),
+									  math.min(corner_ll.y, corner_lr.y, corner_ul.y, corner_ur.y))
+	local transformed_ur = ipe.Vector(math.max(corner_ll.x, corner_lr.x, corner_ul.x, corner_ur.x),
+									  math.max(corner_ll.y, corner_lr.y, corner_ul.y, corner_ur.y))
+	
+	return transformed_ll, transformed_ur 
+end		
+
+local function write_to_pdf(image_obj, pdf_path, total_matrix)
+	-- Write the image object to a pdf. total_matrix should be
+	-- equal to parent_matrix * matrix
+	
+	local doc  = ipe.Document()
+	local page = ipe.Page()
+	
+	local clone = image_obj:clone()
+	clone:set("transformations","affine") -- So full affine matrix (not just translations) respected when cloning
+	
+	local ll, ur = transformed_bbox(image_obj, total_matrix)
+	clone:setMatrix(ipe.Translation(-ll) * total_matrix) --Output image with overall transformation, but w/ the lower left corner at the origin
+	
+	page:insert(1, clone,     0, "alpha")
+	_G.pcall(function() doc:remove(1) end) -- ensure single-page output
+	doc:insert(1, page)
+	
+	--Now set the sheet size
+	local origin = ipe.Vector(0, 0)
+	local papersize = ur - ll
+	local xml = string.format( -- Crop to transformed image
+							  '<ipestyle name="auto-crop"><layout paper="%.6f %.6f" origin="%.6f %.6f" frame="%.6f %.6f" crop="yes"/></ipestyle>',
+							  papersize.x, papersize.y, origin.x, origin.y, papersize.x, papersize.y)
+	
+	local overlay = ipe.Sheet(nil, xml) --New stylesheet
+	local sheets = doc:sheets() --Get document's stylesheet cascade
+	sheets:insert(1, overlay)
+	
+	doc:save(pdf_path)
+end
+
+function export_image(model, obj, matrix, parent_matrix, obj_indices)
+	-- Exports bitmap images
+	--
+	-- Note: global rotation+shearing of an image is embedded in the saved pdf, 
+	-- since TikZ \scopes do not transform included graphics at all. The size of 
+	-- the graphic is set via the `includegraphics `width` option, where the width is 
+	-- the image bounding box width after all transformations i.e. after the 
+	-- transformation `total_matrix = parent_matrix * matrix`. The location of the
+	-- image, on the other hand, is in the parent scope's local coordinates, not
+	-- necesssarily the global coordinates.
+	
+	total_matrix = parent_matrix * matrix
+		
 	-- ---- Image export to PDF ------------------------------------------------
 	local outdir  = _outdir or "."
-	local fname   = model.params.name .. string.format("_img_%03d.pdf", _next_image_serial())
+	local image_serial = _next_image_serial(model)
+	local fname   = params.name .. string.format("_img_%03d.pdf", image_serial)
 	local pdf_path = outdir .. prefs.fsep .. fname
 	
-	local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path) end)
+	if (params.do_text) then
+		table.insert(params.pending_image_jobs, {
+		obj_indices = obj_indices,
+		pno = model.pno,
+		pdf_path = pdf_path,
+		total_matrix = total_matrix
+		})
+	else
+		local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path, total_matrix) end)
+		if not okpdf then 
+			ipeui.messageBox(model.ui:win(), "warning", errpdf)
+		end
+	end
 	
 	-- ---- Build placement ----------------------------------------------------
 	
-	-- Transform each corner, then find the ll of the new bbox
-	img_ll = matrix * ll
-	img_lr = matrix * ipe.Vector(ur.x, ll.y)
-	img_ul = matrix * ipe.Vector(ll.x, ur.y)
-	img_ur = matrix * ur
-	local img_ll_new = ipe.Vector(math.min(img_ll.x, img_lr.x, img_ul.x, img_ur.x),
-								  math.min(img_ll.y, img_lr.y, img_ul.y, img_ur.y))
+	local img_ll_world , img_ur_world = transformed_bbox(obj, total_matrix)
+	local bbox_size_total = img_ur_world - img_ll_world --Bbox size comes from total matrix transform
+	
+	-- Convert world ll corner to the parent scope's local coordinates:
+	local epsilon = 1e-12
+	local img_ll_parent = nil
+	if not parent_matrix:isSingular(epsilon) then
+		img_ll_parent = parent_matrix:inverse() * img_ll_world -- p_local = inv(Lp) * (p - tp) = inv(P) i.e. inverse of affine transformation
+	else
+		img_ll_parent = img_ll_world --If no inverse, don't even try
+		ipeui.messageBox(model.ui:win(), "warning",
+						 string.format("Can't convert image img_%03d properly; has a singular matrix transformation", image_serial))
+	end
+	
+	-- ---- Other options ------------------------------------------------------
+	
+	local options = { "anchor=south west", "inner sep=0", "outer sep=0"}
+	
+	-- opacity is always a symbolic name in ipe
+	local opacity = obj:get("opacity")
+	local prepend = nil
+	if params.stylesheets then prepend = "ipe opacity " end
+	if opacity ~= "opaque" then
+		if(params.stylesheets) then
+			opacity = string.gsub(opacity, "%%", "") -- strip %; opacity is a number
+			string_option(opacity, nil, options, prepend)
+		else --using TikZ styles
+			opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100) -- opacity is a decimal
+			string_option(opacity, "opacity", options, prepend)
+		end
+    end
 	
 	-- ---- Write to tex file --------------------------------------------------
-		
-	local options = { "x=1bp", "y=1bp" }
-	if round(t.x) ~= 0 or round(t.y) ~= 0 then
-		table.insert(options, "shift={" .. svec(img_ll_new) .. "}")
-	end	
-	matrix_to_options(matrix, options)
-	write(indent .. "\\begin{scope}")
-	if #options > 0 then
-		write("[" .. table.concat(options, ", ") .. "]")
-	end
-	write("\n")
-	if okpdf then
-		write(indent .. indent_amt ..
-			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){\\includegraphics{%s}};\n",
-							fname))
-	else
-		write(indent .. indent_amt ..
-			  string.format("\\node[anchor=south west, inner sep=0, outer sep=0] at (0,0){Error: %s};\n",
-							errpdf))
-	end
-	write(indent .. "\\end{scope}\n")
+	
+	write(indent ..
+		  string.format("\\node[%s] at %s{\\includegraphics[width=%sbp]{%s}};\n",
+						table.concat(options, ", "),
+						svec(img_ll_parent),
+						sround(bbox_size_total.x),
+						fname))
 end
 
 --------------------------------------------------------------------------------
@@ -1181,7 +1304,7 @@ end
 --   transformations pathmode
 -- Not implemented: gradient
 
-function export_path(shape, mode, matrix, obj)
+function export_path(model, shape, mode, matrix, obj)
    local orig_matrix = matrix
    local options = {}
 
@@ -1250,8 +1373,8 @@ function export_path(shape, mode, matrix, obj)
       local color_done = nil
       -- Special case: \filldraw with same draw and fill colors
       if drawing and filling and obj:get("tiling") == "normal" then
-         if obj:get("stroke") == obj:get("fill") then
-            color_option(obj:get("stroke"), "color", options, nil, true)
+         if get(model, obj, "stroke") == get(model, obj, "fill") then
+            color_option(get(model, obj, "stroke"), "color", options, nil, true)
             color_done = true
          end
       end
@@ -1260,8 +1383,8 @@ function export_path(shape, mode, matrix, obj)
          -- stroke color
          -- "default" stroke is black
          -- need draw= if filling
-         if obj:get("stroke") ~= "black" and not color_done then
-            color_option(obj:get("stroke"), "draw", options, nil, not filling)
+         if get(model, obj, "stroke") ~= "black" and not color_done then
+            color_option(get(model, obj, "stroke"), "draw", options, nil, not filling)
          end
 
          -- pen / line width
@@ -1297,7 +1420,7 @@ function export_path(shape, mode, matrix, obj)
          if obj:get("rarrow") then
             rarrow = arrow_spec(
                obj:get("rarrowshape"), obj:get("rarrowsize"), nil)
-         end
+         end		 
          if farrow or rarrow then
             table.insert(options, (rarrow or "") .. "-" .. (farrow or ""))
          end
@@ -1307,10 +1430,10 @@ function export_path(shape, mode, matrix, obj)
          if obj:get("tiling") ~= "normal" then
             -- tiling patterns: symbolic only
             string_option(obj:get("tiling"), "pattern", options)
-            color_option(obj:get("fill"), "pattern color", options)
+            color_option(get(model, obj, "fill"), "pattern color", options)
          else
             if not color_done then
-               color_option(obj:get("fill"), "fill", options, nil, not drawing)
+               color_option(get(model, obj, "fill"), "fill", options, nil, not drawing)
             end
          end
 
@@ -1319,14 +1442,35 @@ function export_path(shape, mode, matrix, obj)
             wind="nonzero rule", evenodd="even odd rule" }
          string_option(translate_fillrule[obj:get("fillrule")], nil, options)
       end
-
-      -- opacity is always a symbolic name in ipe
-      local opacity = obj:get("opacity")
-      local prepend = nil
-      if params.stylesheets then prepend = "ipe opacity " end
-      opacity = string.gsub(opacity, "%%", "") -- strip %
-      if opacity ~= "opaque" then
-         string_option(opacity, nil, options, prepend)
+	  
+	  -- opacity is always a symbolic name in ipe
+	  local opacity = obj:get("opacity")
+	  -- Parse the xml for the stroke-opacity
+	  local stroke_opacity = obj:xml():match('stroke%-opacity="(%S+)"')
+	  
+      local fill_string = nil
+	  if stroke_opacity then
+         if(params.stylesheets) then
+		    stroke_opacity = string.gsub(stroke_opacity, "%%", "") -- strip %; opacity is an integer string
+		    string_option(stroke_opacity, nil, options, "ipe draw opacity ")
+		 else
+            if stroke_opacity ~= "opaque" then
+               stroke_opacity = string.format("%.2f", tonumber(string.gsub(stroke_opacity, "%%", "")) / 100) -- opacity is a decimal
+            else
+               stroke_opacity = "1"
+			end
+            string_option(stroke_opacity, "draw opacity", options, nil)
+		 end
+         fill_string = "fill " --If using stroke opacity, use fill opacity
+      end
+	  if opacity ~= "opaque" then
+	     if(params.stylesheets) then
+		    opacity = string.gsub(opacity, "%%", "") -- strip %; opacity is a number
+		    string_option(opacity, nil, options, "ipe "..(fill_string or "").."opacity ")
+		 else
+	        opacity = string.format("%.2f", tonumber(string.gsub(opacity, "%%", "")) / 100) -- opacity is a decimal
+            string_option(opacity, (fill_string or "").."opacity", options, nil)
+		 end
       end
    end
 
@@ -1371,7 +1515,7 @@ end
 --
 -- This doesn't export the textstyle option, since export_text() ignores it
 --
--- Tilings and symbols have to be defined in TikZ manually.
+-- Tilings have to be defined in TikZ manually.
 --
 -- Gradients and effects are not supported.
 
@@ -1445,6 +1589,14 @@ function export_stylesheet(sheets)
       write(indent .. string.format(
                "ipe opacity %s/.style={opacity=%s},\n",
                opacity, sround(val)))
+      -- ADDED for when stroke opacity ~= opacity
+      write(indent .. string.format(
+               "ipe draw opacity %s/.style={draw opacity=%s},\n",
+               opacity, sround(val)))
+      write(indent .. string.format(
+               "ipe fill opacity %s/.style={fill opacity=%s},\n",
+               opacity, sround(val)))
+      -- END ADDED
    end
    write(indent .. "ipe opacity opaque,\n")
 
@@ -1458,9 +1610,11 @@ end
 --------------------------------------------------------------------------------
 
 -- origin is a transformation to apply after all others.
-function export_object(model, obj, origin)
+function export_object(model, obj, origin, parent_matrix, obj_indices)
    -- The object's properties can specify that only the translation part of
    -- the matrix should apply, or only the "rigid part".  Do that now.
+   parent_matrix = parent_matrix or ipe.Matrix(1,0,0,1) --ADDED FOR IMAGES
+   
    local matrix = obj:matrix()
    if obj:type() ~= "text" and obj:type() ~= "reference" then
       -- this attribute is handled differently by text and reference objects
@@ -1479,22 +1633,27 @@ function export_object(model, obj, origin)
    matrix = ipe.Translation(-origin) * matrix
 
    if obj:type() == "path" then
-      export_path(obj:shape(), obj:get("pathmode"), matrix, obj)
+      export_path(model, obj:shape(), obj:get("pathmode"), matrix, obj)
    elseif obj:type() == "text" then
       export_text(model, obj, matrix)
    elseif obj:type() == "group" then
-      export_group(model, obj, matrix)
+      export_group(model, obj, matrix, parent_matrix, obj_indices)
    elseif obj:type() == "reference" then
-      export_mark(model, obj, matrix)
-   elseif obj:type() == "image" then      -- <-- ADDED
-      if(model.params.do_text == true and _img_serial == 0) then
-        run_text_image_dialog(model) -- For first image, run text image dialog
+      if not string.match(obj:get("markshape"), "undefined") then -- reference to a marker
+         export_mark(model, obj, matrix)
+      else -- reference to a general symbol
+         export_reference(model, obj, matrix, parent_matrix, obj_indices)
+	  end
+   elseif obj:type() == "image" then      -- <-- ADDED FOR IMAGES
+      if(params.do_text and model.img_serial == 0) then
+	     if not run_text_image_dialog(model) then -- For first image, run text image dialog
+            ipeui.messageBox(nil, "warning", "No name entered. Image files will not be generated.")
+         end
 	  end
 	  if(params.name) then
-		export_image(model, obj, matrix)
+		export_image(model, obj, matrix, parent_matrix, obj_indices)
 	  else
-	    ipeui.messageBox(nil, "warning", "No image name entered. Images will not be generated.", nil, "ok")
-		_next_image_serial()
+		_next_image_serial(model)
 	  end
    else
       print("Exporting objects of type " .. obj:type() .. " is not supported.")
@@ -1509,19 +1668,51 @@ end
 -- Create a text label containing "text", and insert "preamble" into the
 -- preamble.
 function create_text_obj(model, origin, text, preamble)
-   local t = { label = "TikZ export to text object",
-               pno = model.pno,
-               vno = model.vno,
+
+   local function obj_from_indices(page, obj_indices)
+      local obj_ind = obj_indices[1]
+      if not obj_ind then return nil end
+	  local obj = page[obj_ind]
+      for i = 2, #obj_indices do
+         obj_index = obj_indices[i]
+		 if(_G.type(obj_index)=="string") then --If the index is a string then this object is a symbol
+            obj = model.doc:sheets():find("symbol", obj_index) --Gets the group corresponding to the symbol
+		 elseif(obj:type() == "group") then
+			obj = obj:element(obj_index)
+         end
+      end
+      return obj
+   end
+
+   local t = { label     = "TikZ export to text object",
+               pno       = model.pno,
+               vno       = model.vno,
                selection = model:selection(),
-               original = model:page():clone(),
-               sheets = model.doc:sheets():clone(),
-               text = text,
-               preamble = preamble,
-               model = model }
+               original  = model:page():clone(),
+               sheets    = model.doc:sheets():clone(),
+               text      = text,
+               preamble  = preamble,
+               model     = model,
+               img_jobs  = params.pending_image_jobs or {},
+			   }
 
    t.redo = function(t, doc)
       local page = doc[t.pno]
-
+      
+      -- Generate all needed image PDFs
+      for _,job in ipairs(t.img_jobs) do
+         local page = doc[job.pno]
+		 local obj = obj_from_indices(page, job.obj_indices)
+         if obj and obj:type() == "image" then
+            local okpdf, errpdf = _G.pcall(function() 
+               write_to_pdf(obj, job.pdf_path, job.total_matrix)
+               end)
+            if(not okpdf) then
+               ipeui.messageBox(t.model.ui:win(), "warning", errpdf)
+            end
+         end
+      end
+      
       -- Move all the old objects to another layer
       local old_layer = "_TikZ_replaced"
       if not _G.indexOf(old_layer, page:layers()) then
@@ -1576,7 +1767,6 @@ function create_text_obj(model, origin, text, preamble)
       doc:replaceSheets(t.sheets)
    end
    model:register(t)
-
 end
 
 
@@ -1612,10 +1802,9 @@ end
 -- Run a dialog for naming images when exporting as text
 function run_text_image_dialog(model)
 	-- File dialog
-	local curname = params.filename or model.file_name or "Untitled.tex"
 	local function extract_name()
-		local name
-		name = curname:match(prefs.basename_pattern)
+		local curname = params.filename or model.file_name or "Untitled.tex" --Curname won't change here so we keep it local
+		local name = curname:match(prefs.basename_pattern)
 		-- maybe there was no "/" in the file name
 		if not name then name = curname end
 		name = name:match("(.*)%.[^.]+$")
@@ -1631,8 +1820,7 @@ function run_text_image_dialog(model)
 
 	if not d:execute() then return nil end
 	
-	name = d:get("filenameinput")
-	params.name = name
+	params.name = d:get("filenameinput") --Get the input image base name. Defaults to extract_name().
 	return true
 end
 -- END ADDED FOR IMAGES --
@@ -1694,7 +1882,7 @@ function run_file_dialog(model)
    d:addButton("cancel", "&Cancel", "reject")
 
    -- Workaround: sometimes these updates need to happen in the gui event loop.
-   t = ipeui.Timer(
+   local t = ipeui.Timer(
       {setEnabled=function()
           d:setEnabled("filename", false)
           d:setEnabled("scope", not params.fulldoc)
@@ -1716,6 +1904,7 @@ function run_file_dialog(model)
    params.filename = extract_dir() .. prefs.fsep .. extract_name() .. ".tex"
    params.name = extract_name()
    -- END ADDED FOR IMAGES --
+
    return true
 end
 
@@ -1736,7 +1925,6 @@ function run_text_dialog(model)
    params.scopeonly = false
    params.drawgrid = false
    params.filename = nil
-
    return true
 end
 
@@ -1745,10 +1933,12 @@ end
 params_text = {
    fulldoc=false,
    stylesheets=true,
-   colors=false,
    scopeonly=false,
+   colors=false,
    drawgrid=false,
-   filename=nil
+   filename=nil,
+   do_text=true,
+   pending_image_jobs=nil,
 }
 
 params_file = {
@@ -1757,7 +1947,9 @@ params_file = {
    scopeonly=false,
    colors=true,
    drawgrid=false,
-   filename=nil
+   filename=nil,
+   do_text=false,
+   pending_image_jobs=nil,
 }
 
 params = {}
@@ -1768,6 +1960,8 @@ function run(model, num)
 
    local page = model:page()
    local sheets = model.doc:sheets()
+   
+   model.img_serial = 0 --ADDED FOR IMAGES
 
    -- indentation (global)
    indent = ""
@@ -1775,11 +1969,10 @@ function run(model, num)
    -- Run the parameters dialog
    if do_file then
       params = params_file
-	  params.do_text = false --> Added for images
       if not run_file_dialog(model) then return end
    elseif do_text then
       params = params_text
-	  params.do_text = true --> Added for images
+	  params.pending_image_jobs = {}
       if #model:selection() == 0 then
          ipeui.messageBox(
             model.ui:win(), "warning", "TikZ export error",
@@ -1790,9 +1983,8 @@ function run(model, num)
       if not run_text_dialog(model) then return end
    end
    
-   --NEW: ADDED FOR IMAGES
+   --ADDED FOR IMAGES
    -- Resolve output/temp dirs for images
-   _img_serial = 0
    if do_file then
       -- derive output directory from the file name
       _outdir = params.filename:match(prefs.dir_pattern) or prefs.save_as_directory
@@ -1926,13 +2118,12 @@ function run(model, num)
       end
    end
 
-   model.params = params
    for i, obj, sel, layer in page:objects() do
       -- Only export objects that appear in the current view
       if page:visible(model.vno, i) then
          -- In do_text mode, only export selected objects
          if do_file or (do_text and sel) then
-            export_object(model, obj, origin)
+            export_object(model, obj, origin, nil, {i})
          end
       end
    end
