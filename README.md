@@ -4,27 +4,24 @@ This is a TikZ exporter ipelet: a plugin for [Ipe](http://ipe.otfried.org/) that
 exports **readable** [TikZ](https://sourceforge.net/projects/pgf/) pictures for
 use in LaTeX documents.
 
-It was forked from the fantastic [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz), and tweaked to export images embedded in the ipe document into the TikZ picture.
-
-## Known Bugs
-This ipelet is still under development. While exporting images works under most use-cases, there are still some bugs.
-+ Rerunning the ipelet after performing an export (especially after an `undo`) does not always function properly.
-+ Performing `undo` after exporting can sometimes cause crashes, and `redo` does not always work.
+It was forked from the fantastic [ipe2tikz by Joe Rabinoff](https://github.com/QBobWatson/ipe2tikz), and modified to export images embedded in the ipe document into the TikZ picture.
 
 If you choose "Export to file", then you should place the tex output and images this ipelet produces into your latex document directory so that they
-can be referenced and displayed from the TikZ picture. If you have embedded images, include `\usepackage{graphicx}` in your latex preamble. If you choose "Export to text object", then you will be given the option to choose the root
-file name of any selected images; they will automatically be placed in the same directory as the ipe document.
+can be referenced and displayed from the TikZ picture. If you have embedded images, include `\usepackage{graphicx}` in your latex preamble. If you choose "Export to text object", then you will be given the option to choose the root file name of any selected images; they will automatically be placed in the same directory as the ipe document.
 
 ![ipe window](example.png)
 
 yields
 
 ```latex
-\begin{tikzpicture}[ipe import]
+\begin{tikzpicture}[ipe import, baseline, trim left]
+  \begin{scope}[shift={(-288, -400)}]
+    \clip
+      (304, 416) circle[radius=16];
+    \node[anchor=south west, inner sep=0, outer sep=0] at (287.9998, 400.0005){\includegraphics[width=32bp]{Example_img_001.pdf}};
+  \end{scope}
   \draw[red, thick]
-    (16, 48) rectangle (48, 16);
-  \filldraw[fill=blue, semitransparent]
-    (32, 32) circle[radius=16];
+    (0, 32) rectangle (32, 0);
 \end{tikzpicture}
 ```
 
@@ -183,7 +180,8 @@ you want to dig for details.  In summary:
 + Text objects are exported to TikZ nodes, with the `ipe node` style.
 + Group objects are exported to TikZ scopes.  The clipping path, if it exists,
   becomes a `\clip` path in the scope.
-+ Reference objects (marks) are exported to TikZ `\pic` commands.
++ Reference objects (marks) are exported to TikZ `\pic` commands. **NEW** Many 
+  symbols may also be exported as reference objects.
 + **NEW** Image objects are exported to TikZ `\includegraphics` commands.
 + If configured to do so, the stylesheet cascade is exported to a TikZ style
   called `ipe stylesheet`.
@@ -258,11 +256,11 @@ consists of the `ipe import` style, which contains (among other things):
 + Exporting gradients and effects is not supported.  Gradients could in theory
   be exported as shades, if someone wanted to code it.  Effects probably cannot
   be implemented within PGF/TikZ.
-+ Exporting embedded images is now supported. Embedded images are 
++ **NEW** Exporting embedded images is now supported. Embedded images are 
   saved as individual pdfs. You will need `\usepackage{graphicx}` in your 
   document preamble to display them in your TikZ drawing.
 + Only the current page, and the current view on that page, are exported.
-+ Exporting symbols (marks and arrows) from stylesheets is now supported for
++ **NEW** Exporting symbols (marks and arrows) from stylesheets is now supported for
   symbols with Ipe's normal marks and arrows. Symbols that use the special
   attribute values `sym-stroke` and `sym-fill` are now supported. However,
   other marks and arrows may not be supported.
