@@ -39,7 +39,6 @@
 
 --]]
 
-
 label = "TikZ+images export"
 
 methods = {
@@ -621,7 +620,7 @@ end
 -- into the element objects' transformation matrices.
 --
 -- Relevant attributes: transformations
-function export_group(model, obj, matrix, parent_matrix, obj_indices)
+function export_group(model, obj, matrix, obj_indices)
    local options = {}
    local v = matrix:translation()
    if round(v.x) ~= 0 or round(v.y) ~= 0 then
@@ -642,14 +641,11 @@ function export_group(model, obj, matrix, parent_matrix, obj_indices)
       export_path(model, clip, "clip", ipe.Matrix())
    end
    
-   local old_parent_matrix = parent_matrix
-   parent_matrix = parent_matrix * matrix --ADDED FOR IMAGES
    for i,element in ipairs(obj:elements()) do
       element_indices = {table.unpack(obj_indices)}
 	  table.insert(element_indices, i)
-      export_object(model, element, ipe.Vector(0,0), parent_matrix, element_indices)
+      export_object(model, element, ipe.Vector(0,0), element_indices)
    end
-   parent_matrix = old_parent_matrix
    indent = old_indent
 
    write(indent .. "\\end{scope}\n")
@@ -671,7 +667,7 @@ end
 -- "sym-fill" attributes of child objects with their parent symbol attributes
 -- by setting the params and calling the get(model, obj, prop) wrapper instead 
 -- of obj:get(prop) for prop == "stroke" or "fill".
-function export_reference(model, obj, matrix, parent_matrix, obj_indices)
+function export_reference(model, obj, matrix, obj_indices)
    -- First we need to find the name of the symbol
    -- This is done using basic string processing
    -- First extract xml string
@@ -695,7 +691,7 @@ function export_reference(model, obj, matrix, parent_matrix, obj_indices)
    -- Both reference and group have a matrix, furthermore the reference might have
    -- a position as well. The order of matrices matters of course
    local ok, err = _G.pcall(function()
-     export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()), parent_matrix, obj_indices)
+     export_group(model, group, matrix*group:matrix()*ipe.Translation(obj:position()), obj_indices)
    end)
    
    -- Reset stroke and fill now
@@ -949,9 +945,8 @@ local function transformed_bbox(image_obj, transform_matrix)
 	return transformed_ll, transformed_ur 
 end		
 
-local function write_to_pdf(image_obj, pdf_path, total_matrix)
-	-- Write the image object to a pdf. total_matrix should be
-	-- equal to parent_matrix * matrix
+local function write_to_pdf(image_obj, pdf_path, matrix)
+	-- Write the image object to a pdf.
 	
 	local doc  = ipe.Document()
 	local page = ipe.Page()
@@ -959,8 +954,8 @@ local function write_to_pdf(image_obj, pdf_path, total_matrix)
 	local clone = image_obj:clone()
 	clone:set("transformations","affine") -- So full affine matrix (not just translations) respected when cloning
 	
-	local ll, ur = transformed_bbox(image_obj, total_matrix)
-	clone:setMatrix(ipe.Translation(-ll) * total_matrix) --Output image with overall transformation, but w/ the lower left corner at the origin
+	local ll, ur = transformed_bbox(image_obj, matrix)
+	clone:setMatrix(ipe.Translation(-ll) * matrix) --Output image with overall transformation, but w/ the lower left corner at the origin
 	
 	page:insert(1, clone,     0, "alpha")
 	_G.pcall(function() doc:remove(1) end) -- ensure single-page output
@@ -980,18 +975,14 @@ local function write_to_pdf(image_obj, pdf_path, total_matrix)
 	doc:save(pdf_path)
 end
 
-function export_image(model, obj, matrix, parent_matrix, obj_indices)
+function export_image(model, obj, matrix, obj_indices)
 	-- Exports bitmap images
 	--
-	-- Note: global rotation+shearing of an image is embedded in the saved pdf, 
-	-- since TikZ \scopes do not transform included graphics at all. The size of 
+	-- Note: local rotation+shearing of an image is embedded in the saved pdf. The size of 
 	-- the graphic is set via the `includegraphics `width` option, where the width is 
-	-- the image bounding box width after all transformations i.e. after the 
-	-- transformation `total_matrix = parent_matrix * matrix`. The location of the
-	-- image, on the other hand, is in the parent scope's local coordinates, not
-	-- necesssarily the global coordinates.
-	
-	total_matrix = parent_matrix * matrix
+	-- the image bounding box width after the local transformation i.e. after the 
+	-- transformation `matrix` is applied. The location of the image is in the parent 
+	-- scope's local coordinates, not necesssarily the global coordinates.
 		
 	-- ---- Image export to PDF ------------------------------------------------
 	local outdir  = _outdir or "."
@@ -1004,10 +995,10 @@ function export_image(model, obj, matrix, parent_matrix, obj_indices)
 		obj_indices = obj_indices,
 		pno = model.pno,
 		pdf_path = pdf_path,
-		total_matrix = total_matrix
+		matrix = matrix
 		})
 	else
-		local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path, total_matrix) end)
+		local okpdf, errpdf = _G.pcall(function() write_to_pdf(obj, pdf_path, matrix) end)
 		if not okpdf then 
 			ipeui.messageBox(model.ui:win(), "warning", errpdf)
 		end
@@ -1015,23 +1006,12 @@ function export_image(model, obj, matrix, parent_matrix, obj_indices)
 	
 	-- ---- Build placement ----------------------------------------------------
 	
-	local img_ll_world , img_ur_world = transformed_bbox(obj, total_matrix)
-	local bbox_size_total = img_ur_world - img_ll_world --Bbox size comes from total matrix transform
-	
-	-- Convert world ll corner to the parent scope's local coordinates:
-	local epsilon = 1e-12
-	local img_ll_parent = nil
-	if not parent_matrix:isSingular(epsilon) then
-		img_ll_parent = parent_matrix:inverse() * img_ll_world -- p_local = inv(Lp) * (p - tp) = inv(P) i.e. inverse of affine transformation
-	else
-		img_ll_parent = img_ll_world --If no inverse, don't even try
-		ipeui.messageBox(model.ui:win(), "warning",
-						 string.format("Can't convert image img_%03d properly; has a singular matrix transformation", image_serial))
-	end
+	local img_ll_parent , img_ur_parent = transformed_bbox(obj, matrix)
+	local bbox_size_total = img_ur_parent - img_ll_parent
 	
 	-- ---- Other options ------------------------------------------------------
 	
-	local options = { "anchor=south west", "inner sep=0", "outer sep=0"}
+	local options = { "anchor=south west", "inner sep=0", "outer sep=0", "transform shape"} -- `transform shape` transforms the included graphic according to parent scopes
 	
 	-- opacity is always a symbolic name in ipe
 	local opacity = obj:get("opacity")
@@ -1610,11 +1590,9 @@ end
 --------------------------------------------------------------------------------
 
 -- origin is a transformation to apply after all others.
-function export_object(model, obj, origin, parent_matrix, obj_indices)
+function export_object(model, obj, origin, obj_indices)
    -- The object's properties can specify that only the translation part of
-   -- the matrix should apply, or only the "rigid part".  Do that now.
-   parent_matrix = parent_matrix or ipe.Matrix(1,0,0,1) --ADDED FOR IMAGES
-   
+   -- the matrix should apply, or only the "rigid part".  Do that now.   
    local matrix = obj:matrix()
    if obj:type() ~= "text" and obj:type() ~= "reference" then
       -- this attribute is handled differently by text and reference objects
@@ -1637,12 +1615,12 @@ function export_object(model, obj, origin, parent_matrix, obj_indices)
    elseif obj:type() == "text" then
       export_text(model, obj, matrix)
    elseif obj:type() == "group" then
-      export_group(model, obj, matrix, parent_matrix, obj_indices)
+      export_group(model, obj, matrix, obj_indices)
    elseif obj:type() == "reference" then
       if not string.match(obj:get("markshape"), "undefined") then -- reference to a marker
          export_mark(model, obj, matrix)
       else -- reference to a general symbol
-         export_reference(model, obj, matrix, parent_matrix, obj_indices)
+         export_reference(model, obj, matrix, obj_indices)
 	  end
    elseif obj:type() == "image" then      -- <-- ADDED FOR IMAGES
       if(params.do_text and model.img_serial == 0) then
@@ -1651,7 +1629,7 @@ function export_object(model, obj, origin, parent_matrix, obj_indices)
          end
 	  end
 	  if(params.name) then
-		export_image(model, obj, matrix, parent_matrix, obj_indices)
+		export_image(model, obj, matrix, obj_indices)
 	  else
 		_next_image_serial(model)
 	  end
@@ -1705,7 +1683,7 @@ function create_text_obj(model, origin, text, preamble)
 		 local obj = obj_from_indices(page, job.obj_indices)
          if obj and obj:type() == "image" then
             local okpdf, errpdf = _G.pcall(function() 
-               write_to_pdf(obj, job.pdf_path, job.total_matrix)
+               write_to_pdf(obj, job.pdf_path, job.matrix)
                end)
             if(not okpdf) then
                ipeui.messageBox(t.model.ui:win(), "warning", errpdf)
@@ -2123,7 +2101,7 @@ function run(model, num)
       if page:visible(model.vno, i) then
          -- In do_text mode, only export selected objects
          if do_file or (do_text and sel) then
-            export_object(model, obj, origin, nil, {i})
+            export_object(model, obj, origin, {i})
          end
       end
    end
